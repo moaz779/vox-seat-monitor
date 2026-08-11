@@ -8,6 +8,7 @@ This runs the VOX monitor from GitHub every 5 minutes, so your PC and home inter
 - Telegram alerts still send when new days, new showtimes, booking links, or interested seats are found.
 - Telegram bot commands do not run live because GitHub Actions is not an always-on server.
 - Manual date checks use the GitHub **Run workflow** button instead.
+- The workflow uses GitHub's Windows runner because VOX timed out repeatedly from Ubuntu runners.
 
 ## Create The Repository
 

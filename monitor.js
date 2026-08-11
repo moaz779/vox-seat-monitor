@@ -444,10 +444,11 @@ function loadState() {
       releasedDates: state.releasedDates || {},
       lastRunAt: state.lastRunAt || null,
       lastFullSeatCheckAt: state.lastFullSeatCheckAt || null,
+      lastDateScanFailureSignature: state.lastDateScanFailureSignature || null,
       hasSentBaseline: !!state.hasSentBaseline,
     };
   } catch {
-    return { showtimes: {}, seatSnapshots: {}, prioritySnapshots: {}, releasedDates: {}, lastRunAt: null, lastFullSeatCheckAt: null, hasSentBaseline: false };
+    return { showtimes: {}, seatSnapshots: {}, prioritySnapshots: {}, releasedDates: {}, lastRunAt: null, lastFullSeatCheckAt: null, lastDateScanFailureSignature: null, hasSentBaseline: false };
   }
 }
 
@@ -865,7 +866,7 @@ async function runCycle() {
       }
     });
 
-    appendDateFailureAlerts(alerts, dateFailures, targetDates.length);
+    appendDateFailureAlerts(alerts, dateFailures, targetDates.length, state);
 
     for (const page of datePages.filter(Boolean)) {
       discovered.push(...page.showtimes);
@@ -1107,11 +1108,27 @@ function summarizeSeatCheckReasons(entries) {
     .join(', ');
 }
 
-function appendDateFailureAlerts(alerts, dateFailures, targetDateCount) {
-  if (!dateFailures.length) return;
+function appendDateFailureAlerts(alerts, dateFailures, targetDateCount, state) {
+  if (!dateFailures.length) {
+    if (state.lastDateScanFailureSignature) state.lastDateScanFailureSignature = null;
+    return;
+  }
 
   const first = dateFailures[0];
-  if (dateFailures.length === targetDateCount) {
+  const allFailed = dateFailures.length === targetDateCount;
+  const normalizedFirstMessage = normalizeFailureMessage(first.message);
+  const signature = allFailed
+    ? `all|${targetDateCount}|${normalizedFirstMessage}`
+    : `partial|${dateFailures.length}|${normalizedFirstMessage}`;
+
+  if (state.lastDateScanFailureSignature === signature) {
+    log(`Suppressing repeated showtime scan warning: ${signature}`);
+    return;
+  }
+
+  state.lastDateScanFailureSignature = signature;
+
+  if (allFailed) {
     alerts.push(`SHOWTIME SCAN WARNING: Could not read any of ${targetDateCount} date page(s) from VOX. First failure: ${displayDate(first.dateYmd)} - ${first.message}. GitHub will retry on the next scheduled run.`);
     return;
   }
@@ -1122,6 +1139,14 @@ function appendDateFailureAlerts(alerts, dateFailures, targetDateCount) {
     .join('; ');
   const more = dateFailures.length > 4 ? `; +${dateFailures.length - 4} more` : '';
   alerts.push(`SHOWTIME SCAN WARNING: ${dateFailures.length}/${targetDateCount} date page(s) failed: ${sample}${more}.`);
+}
+
+function normalizeFailureMessage(message) {
+  return String(message || '')
+    .replace(/\bafter \d+ms\b/g, 'after TIMEOUT')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 160);
 }
 
 async function startTelegramCommandLoop() {
