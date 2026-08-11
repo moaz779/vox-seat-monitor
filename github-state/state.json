@@ -1,10 +1,334 @@
 {
-  "showtimes": {},
-  "seatSnapshots": {},
-  "prioritySnapshots": {},
-  "releasedDates": {},
+  "showtimes": {
+    "20260812|IMAX|11:15am": {
+      "key": "20260812|IMAX|11:15am",
+      "date": "20260812",
+      "time": "11:15am",
+      "experience": "IMAX",
+      "href": "https://egy.voxcinemas.com/booking/0047-268317",
+      "bookingId": "0047-268317",
+      "listingStatus": "listed-unavailable",
+      "firstSeenAt": "2026-08-11T20:02:06.221Z",
+      "lastSeenAt": "2026-08-11T20:02:06.221Z"
+    },
+    "20260812|IMAX|3:00pm": {
+      "key": "20260812|IMAX|3:00pm",
+      "date": "20260812",
+      "time": "3:00pm",
+      "experience": "IMAX",
+      "href": "https://egy.voxcinemas.com/booking/0047-268318",
+      "bookingId": "0047-268318",
+      "listingStatus": "listed-unavailable",
+      "firstSeenAt": "2026-08-11T20:02:06.221Z",
+      "lastSeenAt": "2026-08-11T20:02:06.221Z"
+    },
+    "20260812|IMAX|6:45pm": {
+      "key": "20260812|IMAX|6:45pm",
+      "date": "20260812",
+      "time": "6:45pm",
+      "experience": "IMAX",
+      "href": "https://egy.voxcinemas.com/booking/0047-268319",
+      "bookingId": "0047-268319",
+      "listingStatus": "listed-unavailable",
+      "firstSeenAt": "2026-08-11T20:02:06.221Z",
+      "lastSeenAt": "2026-08-11T20:02:06.221Z"
+    },
+    "20260812|IMAX|10:30pm": {
+      "key": "20260812|IMAX|10:30pm",
+      "date": "20260812",
+      "time": "10:30pm",
+      "experience": "IMAX",
+      "href": "https://egy.voxcinemas.com/booking/0047-268320",
+      "bookingId": "0047-268320",
+      "listingStatus": "listed-unavailable",
+      "firstSeenAt": "2026-08-11T20:02:06.221Z",
+      "lastSeenAt": "2026-08-11T20:02:06.221Z"
+    }
+  },
+  "seatSnapshots": {
+    "20260812|IMAX|11:15am": {
+      "signature": "{\"interestedAvailableSeats\":[]}",
+      "updatedAt": "2026-08-11T20:02:06.221Z",
+      "seatInfo": {
+        "key": "20260812|IMAX|11:15am",
+        "date": "20260812",
+        "time": "11:15am",
+        "experience": "IMAX",
+        "href": "https://egy.voxcinemas.com/booking/0047-268317",
+        "bookingId": "0047-268317",
+        "listingStatus": "listed-unavailable",
+        "url": "https://egy.voxcinemas.com/booking/90615fb9-e610-4d2c-a41a-64545f835c7a_0047-268317/seats#guest",
+        "when": "11:15am Wednesday, 12 August 2026",
+        "screen": "IMAX 1",
+        "soldOut": false,
+        "seatCount": 311,
+        "available": 8,
+        "unavailable": 303,
+        "availableSeats": [
+          {
+            "seat": "N-3",
+            "row": "N",
+            "number": 3,
+            "type": "Standard"
+          },
+          {
+            "seat": "P-21",
+            "row": "P",
+            "number": 21,
+            "type": "Standard"
+          },
+          {
+            "seat": "P-11",
+            "row": "P",
+            "number": 11,
+            "type": "Standard"
+          },
+          {
+            "seat": "Q-25",
+            "row": "Q",
+            "number": 25,
+            "type": "Standard"
+          },
+          {
+            "seat": "Q-24",
+            "row": "Q",
+            "number": 24,
+            "type": "Standard"
+          },
+          {
+            "seat": "Q-23",
+            "row": "Q",
+            "number": 23,
+            "type": "Standard"
+          },
+          {
+            "seat": "Q-17",
+            "row": "Q",
+            "number": 17,
+            "type": "Standard"
+          },
+          {
+            "seat": "Q-10",
+            "row": "Q",
+            "number": 10,
+            "type": "Standard"
+          }
+        ],
+        "availableRows": {
+          "Q": {
+            "total": 19,
+            "available": [
+              {
+                "seat": "Q-25",
+                "row": "Q",
+                "number": 25,
+                "type": "Standard"
+              },
+              {
+                "seat": "Q-24",
+                "row": "Q",
+                "number": 24,
+                "type": "Standard"
+              },
+              {
+                "seat": "Q-23",
+                "row": "Q",
+                "number": 23,
+                "type": "Standard"
+              },
+              {
+                "seat": "Q-17",
+                "row": "Q",
+                "number": 17,
+                "type": "Standard"
+              },
+              {
+                "seat": "Q-10",
+                "row": "Q",
+                "number": 10,
+                "type": "Standard"
+              }
+            ]
+          },
+          "P": {
+            "total": 19,
+            "available": [
+              {
+                "seat": "P-21",
+                "row": "P",
+                "number": 21,
+                "type": "Standard"
+              },
+              {
+                "seat": "P-11",
+                "row": "P",
+                "number": 11,
+                "type": "Standard"
+              }
+            ]
+          },
+          "N": {
+            "total": 31,
+            "available": [
+              {
+                "seat": "N-3",
+                "row": "N",
+                "number": 3,
+                "type": "Standard"
+              }
+            ]
+          }
+        },
+        "seatTypeCounts": {
+          "Standard": 131,
+          "Premium": 180
+        },
+        "pageText": "BOOK TICKETS The Odyssey 11:15am Wednesday, 12 August 2026 City Centre Almaza Confirm Seats 0.00 EGP MY BASKET The Odyssey 16+ English 175 min Venue: City Centre Almaza When: 11:15am Wednesday, 12 August 2026 Experience: IMAX Screen: IMAX 1 Change Showtime VOX MEMBERSHIP Edit You are currently booking as a guest. CHOOSE SEATS 11:15am Wednesday, 12 August 2026 CHANGE EXPERIENCE STANDARD GOLD IMAX Change Showtime 11:15am 3:00pm 6:45pm 10:30pm CHOOSE SEATS UPGRADES FOOD & DRINKS YOUR DETAILS REVIEW",
+        "interestedAvailable": 0,
+        "interestedAvailableSeats": [],
+        "priorityAvailable": 0,
+        "priorityAvailableSeats": []
+      }
+    },
+    "20260812|IMAX|3:00pm": {
+      "signature": "{\"interestedAvailableSeats\":[]}",
+      "updatedAt": "2026-08-11T20:02:06.221Z",
+      "seatInfo": {
+        "key": "20260812|IMAX|3:00pm",
+        "date": "20260812",
+        "time": "3:00pm",
+        "experience": "IMAX",
+        "href": "https://egy.voxcinemas.com/booking/0047-268318",
+        "bookingId": "0047-268318",
+        "listingStatus": "listed-unavailable",
+        "url": "https://egy.voxcinemas.com/booking/605a898f-7898-4539-ae79-57bc6191da39_0047-268318/seats#guest",
+        "when": "3:00pm Wednesday, 12 August 2026",
+        "screen": "IMAX 1",
+        "soldOut": true,
+        "seatCount": 0,
+        "available": 0,
+        "unavailable": 0,
+        "availableSeats": [],
+        "availableRows": {},
+        "seatTypeCounts": {},
+        "pageText": "BOOK TICKETS The Odyssey 3:00pm Wednesday, 12 August 2026 City Centre Almaza 0.00 EGP MY BASKET The Odyssey 16+ English 175 min Venue: City Centre Almaza When: 3:00pm Wednesday, 12 August 2026 Experience: IMAX Screen: IMAX 1 Change Showtime VOX MEMBERSHIP Edit You are currently booking as a guest. CHOOSE SEATS 3:00pm Wednesday, 12 August 2026 CHANGE EXPERIENCE STANDARD GOLD IMAX Change Showtime 11:15am 3:00pm 6:45pm 10:30pm CHOOSE SEATS We are sorry but this showtime has now sold out, please sel",
+        "interestedAvailable": 0,
+        "interestedAvailableSeats": [],
+        "priorityAvailable": 0,
+        "priorityAvailableSeats": []
+      }
+    },
+    "20260812|IMAX|6:45pm": {
+      "signature": "{\"interestedAvailableSeats\":[]}",
+      "updatedAt": "2026-08-11T20:02:06.221Z",
+      "seatInfo": {
+        "key": "20260812|IMAX|6:45pm",
+        "date": "20260812",
+        "time": "6:45pm",
+        "experience": "IMAX",
+        "href": "https://egy.voxcinemas.com/booking/0047-268319",
+        "bookingId": "0047-268319",
+        "listingStatus": "listed-unavailable",
+        "url": "https://egy.voxcinemas.com/booking/aa0fc1bb-6a7c-4c56-939e-ab64601048a4_0047-268319/seats#guest",
+        "when": "6:45pm Wednesday, 12 August 2026",
+        "screen": "IMAX 1",
+        "soldOut": false,
+        "seatCount": 311,
+        "available": 1,
+        "unavailable": 310,
+        "availableSeats": [
+          {
+            "seat": "G-2",
+            "row": "G",
+            "number": 2,
+            "type": "Premium"
+          }
+        ],
+        "availableRows": {
+          "G": {
+            "total": 20,
+            "available": [
+              {
+                "seat": "G-2",
+                "row": "G",
+                "number": 2,
+                "type": "Premium"
+              }
+            ]
+          }
+        },
+        "seatTypeCounts": {
+          "Standard": 131,
+          "Premium": 180
+        },
+        "pageText": "BOOK TICKETS The Odyssey 6:45pm Wednesday, 12 August 2026 City Centre Almaza Confirm Seats 0.00 EGP MY BASKET The Odyssey 16+ English 175 min Venue: City Centre Almaza When: 6:45pm Wednesday, 12 August 2026 Experience: IMAX Screen: IMAX 1 Change Showtime VOX MEMBERSHIP Edit You are currently booking as a guest. CHOOSE SEATS 6:45pm Wednesday, 12 August 2026 CHANGE EXPERIENCE STANDARD GOLD IMAX Change Showtime 11:15am 3:00pm 6:45pm 10:30pm CHOOSE SEATS UPGRADES FOOD & DRINKS YOUR DETAILS REVIEW & ",
+        "interestedAvailable": 0,
+        "interestedAvailableSeats": [],
+        "priorityAvailable": 0,
+        "priorityAvailableSeats": []
+      }
+    },
+    "20260812|IMAX|10:30pm": {
+      "signature": "{\"interestedAvailableSeats\":[]}",
+      "updatedAt": "2026-08-11T20:02:06.221Z",
+      "seatInfo": {
+        "key": "20260812|IMAX|10:30pm",
+        "date": "20260812",
+        "time": "10:30pm",
+        "experience": "IMAX",
+        "href": "https://egy.voxcinemas.com/booking/0047-268320",
+        "bookingId": "0047-268320",
+        "listingStatus": "listed-unavailable",
+        "url": "https://egy.voxcinemas.com/booking/02ddeb24-3edf-42b4-aa08-32ef46289a5f_0047-268320/seats#guest",
+        "when": "10:30pm Wednesday, 12 August 2026",
+        "screen": "IMAX 1",
+        "soldOut": true,
+        "seatCount": 0,
+        "available": 0,
+        "unavailable": 0,
+        "availableSeats": [],
+        "availableRows": {},
+        "seatTypeCounts": {},
+        "pageText": "BOOK TICKETS The Odyssey 10:30pm Wednesday, 12 August 2026 City Centre Almaza 0.00 EGP MY BASKET The Odyssey 16+ English 175 min Venue: City Centre Almaza When: 10:30pm Wednesday, 12 August 2026 Experience: IMAX Screen: IMAX 1 Change Showtime VOX MEMBERSHIP Edit You are currently booking as a guest. CHOOSE SEATS 10:30pm Wednesday, 12 August 2026 CHANGE EXPERIENCE STANDARD GOLD IMAX Change Showtime 11:15am 3:00pm 6:45pm 10:30pm CHOOSE SEATS We are sorry but this showtime has now sold out, please ",
+        "interestedAvailable": 0,
+        "interestedAvailableSeats": [],
+        "priorityAvailable": 0,
+        "priorityAvailableSeats": []
+      }
+    }
+  },
+  "prioritySnapshots": {
+    "20260812|IMAX|11:15am": {
+      "signature": "[]",
+      "updatedAt": "2026-08-11T20:02:06.221Z",
+      "priorityAvailableSeats": []
+    },
+    "20260812|IMAX|3:00pm": {
+      "signature": "[]",
+      "updatedAt": "2026-08-11T20:02:06.221Z",
+      "priorityAvailableSeats": []
+    },
+    "20260812|IMAX|6:45pm": {
+      "signature": "[]",
+      "updatedAt": "2026-08-11T20:02:06.221Z",
+      "priorityAvailableSeats": []
+    },
+    "20260812|IMAX|10:30pm": {
+      "signature": "[]",
+      "updatedAt": "2026-08-11T20:02:06.221Z",
+      "priorityAvailableSeats": []
+    }
+  },
+  "releasedDates": {
+    "20260812": {
+      "date": "20260812",
+      "firstSeenAt": "2026-08-11T20:02:06.221Z",
+      "lastSeenAt": "2026-08-11T20:02:06.221Z",
+      "showtimeCount": 4
+    }
+  },
   "lastRunAt": null,
   "lastFullSeatCheckAt": null,
-  "lastDateScanFailureSignature": "aborted|21|HTTP request timed out after TIMEOUT",
+  "lastDateScanFailureSignature": null,
   "hasSentBaseline": true
 }
