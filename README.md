@@ -116,6 +116,7 @@ The script sends alerts when:
 - Available seats change.
 
 With `VOX_COMMAND_ONLY=1`, these automatic alerts are disabled. The script checks VOX only after you send a Telegram command such as `/check 13/8`.
+With `VOX_TELEGRAM_IGNORE_OLD_UPDATES_ON_START=1`, old Telegram messages queued while the bot was off are discarded at startup, so only new commands sent while it is running trigger checks.
 
 Interested-seat alerts are sent immediately after that seat map is read, before the script continues to later showtimes in the same cycle.
 Newly released days are also sent immediately after the fast date scan, before any seat-map checks, with booking links for every listed showtime on that day.
@@ -138,7 +139,7 @@ When the scheduled monitor is running, message your bot:
 
 Showtime/day discovery is intentionally fast: the script checks the live showtime HTML with no-cache headers and scans dates in parallel.
 
-By default, automatic seat-map checks are release-driven to keep bandwidth low: the script opens live booking pages only when a new date, new showtime, new booking link, or newly bookable showtime appears. Use `/check 13/8` for an immediate full seat scan of a date. Set `VOX_AUTO_SEAT_CHECK_MODE=all` only if you want the old bandwidth-heavy behavior that checks every known seat map every cycle.
+In command-only mode, automatic seat-map checks are disabled. Use `/check 13/8` for a full seat scan of one date. Set `VOX_COMMAND_ONLY=0` and `VOX_AUTO_SEAT_CHECK_MODE=release` only if you want automatic release-driven checks again.
 
 To receive a Telegram summary on every check even when nothing changed:
 
@@ -162,8 +163,9 @@ $env:VOX_SHOWTIME_FETCH_MODE="http"
 $env:VOX_BLOCK_ASSETS="1"
 $env:VOX_SKIP_UNAVAILABLE_LISTINGS="0"
 $env:VOX_TELEGRAM_COMMANDS="1"
+$env:VOX_TELEGRAM_IGNORE_OLD_UPDATES_ON_START="1"
 $env:VOX_COMMAND_ONLY="1"
-$env:VOX_AUTO_SEAT_CHECK_MODE="release"
+$env:VOX_AUTO_SEAT_CHECK_MODE="none"
 $env:VOX_FULL_SEAT_CHECK_EVERY_MINUTES="0"
 $env:VOX_PERSIST_LAST_RUN="0"
 $env:VOX_PERSIST_SEEN_TIMESTAMPS="0"

@@ -42,6 +42,7 @@ const CONFIG = {
   disableTelegram: boolEnv('VOX_DISABLE_TELEGRAM', false) || process.argv.includes('--disable-telegram'),
   telegramCommands: boolEnv('VOX_TELEGRAM_COMMANDS', true),
   telegramCommandTimeoutSeconds: numberEnv('VOX_TELEGRAM_COMMAND_TIMEOUT_SECONDS', 25),
+  telegramIgnoreOldUpdatesOnStart: boolEnv('VOX_TELEGRAM_IGNORE_OLD_UPDATES_ON_START', boolEnv('VOX_COMMAND_ONLY', false)),
   sendEveryCheck: boolEnv('VOX_SEND_EVERY_CHECK', false),
   notifySeatChanges: boolEnv('VOX_NOTIFY_SEAT_CHANGES', true),
   commandOnly: boolEnv('VOX_COMMAND_ONLY', false),
@@ -1396,11 +1397,16 @@ async function startTelegramCommandLoop() {
 }
 
 async function initializeTelegramCommandOffset() {
-  if (loadTelegramOffset() !== null) return;
+  if (!CONFIG.telegramIgnoreOldUpdatesOnStart && loadTelegramOffset() !== null) return;
   const updates = await getTelegramUpdates(null, 0);
   const lastUpdateId = updates.reduce((max, update) => Math.max(max, Number(update.update_id) || 0), 0);
-  saveTelegramOffset(lastUpdateId ? lastUpdateId + 1 : 0);
-  if (updates.length) log(`Initialized Telegram command offset; ignored ${updates.length} old update(s).`);
+  const nextOffset = lastUpdateId ? lastUpdateId + 1 : (loadTelegramOffset() ?? 0);
+  saveTelegramOffset(nextOffset);
+  if (updates.length) {
+    log(`Initialized Telegram command offset; ignored ${updates.length} old update(s).`);
+  } else if (CONFIG.telegramIgnoreOldUpdatesOnStart) {
+    log('Initialized Telegram command offset; no old update(s) to ignore.');
+  }
 }
 
 async function pollTelegramCommandsOnce() {
