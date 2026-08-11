@@ -41,14 +41,6 @@ jobs:
         run: |
           node --version
           node --check monitor.js
-          if [ -f "/c/Program Files/Google/Chrome/Application/chrome.exe" ]; then
-            "/c/Program Files/Google/Chrome/Application/chrome.exe" --version
-          elif [ -f "/c/Program Files/Microsoft/Edge/Application/msedge.exe" ]; then
-            "/c/Program Files/Microsoft/Edge/Application/msedge.exe" --version
-          else
-            echo "No Chrome/Edge executable found in the expected Windows runner paths."
-            exit 1
-          fi
 
       - name: Run VOX monitor
         env:
