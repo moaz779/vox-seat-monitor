@@ -53,6 +53,7 @@ const CONFIG = {
   measureNetwork: boolEnv('VOX_MEASURE_NETWORK', false) || process.argv.includes('--measure-network'),
   persistLastRun: boolEnv('VOX_PERSIST_LAST_RUN', true),
   persistSeenTimestamps: boolEnv('VOX_PERSIST_SEEN_TIMESTAMPS', true),
+  forceExitAfterOnce: boolEnv('VOX_FORCE_EXIT_AFTER_ONCE', process.env.GITHUB_ACTIONS === 'true'),
   debug: boolEnv('VOX_DEBUG', false),
 };
 
@@ -1882,11 +1883,13 @@ async function main() {
 
   if (CHECK_DATE) {
     await runRequestedDateCheck(CHECK_DATE);
+    finishOneShot();
     return;
   }
 
   if (ONCE) {
     await runCycle();
+    finishOneShot();
     return;
   }
 
@@ -1921,4 +1924,11 @@ async function main() {
 main().catch((error) => {
   console.error(error.stack || error.message || error);
   process.exitCode = 1;
+  if (CONFIG.forceExitAfterOnce && (ONCE || CHECK_DATE)) process.exit(1);
 });
+
+function finishOneShot() {
+  if (!CONFIG.forceExitAfterOnce) return;
+  log('One-shot run complete; forcing process exit for hosted runner cleanup.');
+  process.exit(0);
+}

@@ -68,6 +68,7 @@ jobs:
           VOX_FULL_SEAT_CHECK_EVERY_MINUTES: "0"
           VOX_PERSIST_LAST_RUN: "0"
           VOX_PERSIST_SEEN_TIMESTAMPS: "0"
+          VOX_FORCE_EXIT_AFTER_ONCE: "1"
           VOX_CHROME_NO_SANDBOX: "1"
           REQUESTED_DATE: ${{ github.event.inputs.check_date }}
         run: |
