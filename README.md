@@ -1,12 +1,12 @@
 # VOX Seat Monitor
 
-Watches VOX Egypt showtimes for one movie/cinema/experience, then optionally sends Telegram alerts.
+Watches VOX Egypt showtimes for one movie/cinema/experience set, then optionally sends Telegram alerts.
 
 Default target:
 
 - Cinema: `city-centre-almaza`
 - Movie: `the-odyssey`
-- Experience: `IMAX`
+- Experiences: `IMAX`, `Standard`
 - Poll interval: 5 minutes
 - Future window: 30 days
 
@@ -153,7 +153,7 @@ $env:VOX_SEND_EVERY_CHECK="1"
 $env:VOX_LOOKAHEAD_DAYS="21"
 # $env:VOX_END_DATE="20260820"
 $env:VOX_POLL_MINUTES="5"
-$env:VOX_EXPERIENCE="IMAX"
+$env:VOX_EXPERIENCES="IMAX,Standard"
 $env:VOX_CITY="city-centre-almaza"
 $env:VOX_MOVIE="the-odyssey"
 $env:VOX_PARALLEL_DATE_SCANS="6"
@@ -198,18 +198,26 @@ Rows E/F/G/H/J/K/L, seat numbers 18 through 7
 The priority standalone Telegram alert triggers for:
 
 ```text
+IMAX:
 H-16 H-15 H-14 H-13 H-12
 J-16 J-15 J-14 J-13 J-12
 K-16 K-15 K-14 K-13 K-12
+
+Standard:
+B-8 B-7 B-6 B-5 B-4 B-3 B-2 B-1
+C-8 C-7 C-6 C-5 C-4 C-3 C-2 C-1
+D-8 D-7 D-6 D-5 D-4 D-3 D-2 D-1
 ```
 
 Override those in `.env` with:
 
 ```text
+VOX_EXPERIENCES=IMAX,Standard
 VOX_INTERESTED_ROWS=E,F,G,H,J,K,L
 VOX_INTERESTED_MIN_SEAT=7
 VOX_INTERESTED_MAX_SEAT=18
 VOX_PRIORITY_SEATS=H:16,15,14,13,12;J:16,15,14,13,12;K:16,15,14,13,12
+VOX_STANDARD_PRIORITY_SEATS=B:8,7,6,5,4,3,2,1;C:8,7,6,5,4,3,2,1;D:8,7,6,5,4,3,2,1
 ```
 
 Sold-out and zero-interest-seat results are kept quiet in Telegram.

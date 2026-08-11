@@ -14,6 +14,7 @@ const CONFIG = {
   city: env('VOX_CITY', 'city-centre-almaza'),
   movie: env('VOX_MOVIE', 'the-odyssey'),
   experience: env('VOX_EXPERIENCE', 'IMAX'),
+  experiences: parseExperiences(env('VOX_EXPERIENCES', env('VOX_EXPERIENCE', 'IMAX'))),
   lookaheadDays: numberEnv('VOX_LOOKAHEAD_DAYS', 30),
   startDate: env('VOX_START_DATE', ''),
   endDate: env('VOX_END_DATE', ''),
@@ -36,6 +37,7 @@ const CONFIG = {
   interestedMinSeat: numberEnv('VOX_INTERESTED_MIN_SEAT', 7),
   interestedMaxSeat: numberEnv('VOX_INTERESTED_MAX_SEAT', 18),
   prioritySeatKeys: parsePrioritySeats(env('VOX_PRIORITY_SEATS', 'H:16,15,14,13,12;J:16,15,14,13,12;K:16,15,14,13,12')),
+  standardPrioritySeatKeys: parsePrioritySeats(env('VOX_STANDARD_PRIORITY_SEATS', 'B:8,7,6,5,4,3,2,1;C:8,7,6,5,4,3,2,1;D:8,7,6,5,4,3,2,1')),
   chromePath: env('VOX_CHROME_PATH', findBrowserPath()),
   telegramToken: env('TELEGRAM_BOT_TOKEN', ''),
   telegramChatId: env('TELEGRAM_CHAT_ID', ''),
@@ -194,6 +196,14 @@ function parseSeatRows(value) {
     .split(/[,\s/]+/)
     .map((row) => row.trim().toUpperCase())
     .filter(Boolean);
+}
+
+function parseExperiences(value) {
+  const experiences = String(value || '')
+    .split(/[,\n|]+/)
+    .map((experience) => normalize(experience))
+    .filter(Boolean);
+  return experiences.length ? [...new Set(experiences)] : ['IMAX'];
 }
 
 function parsePrioritySeats(value) {
@@ -412,7 +422,6 @@ function waitForProcessExit(child, timeoutMs) {
 }
 
 function parseShowtimesHtml(html, dateYmd, sourceUrl) {
-  const wantedExperience = CONFIG.experience.toLowerCase();
   const showtimes = [];
   const source = String(html || '');
   const showtimesMatch = source.match(/<ol\b(?=[^>]*\bclass\s*=\s*["'][^"']*\bshowtimes\b)[^>]*>/i);
@@ -423,7 +432,7 @@ function parseShowtimesHtml(html, dateYmd, sourceUrl) {
   const experiencePattern = /<strong\b[^>]*>([\s\S]*?)<\/strong>\s*<ol\b[^>]*>([\s\S]*?)<\/ol>/gi;
   for (const experienceMatch of section.matchAll(experiencePattern)) {
     const experience = normalize(stripHtml(experienceMatch[1]));
-    if (experience.toLowerCase() !== wantedExperience) continue;
+    if (!isWantedExperience(experience)) continue;
 
     const timePattern = /<li\b([^>]*)>([\s\S]*?)<\/li>/gi;
     for (const timeMatch of experienceMatch[2].matchAll(timePattern)) {
@@ -442,7 +451,7 @@ function parseShowtimesHtml(html, dateYmd, sourceUrl) {
         key: [dateYmd, experience.toUpperCase(), parsedTime[1].replace(/\s+/g, '').toLowerCase()].join('|'),
         date: dateYmd,
         time: parsedTime[1].replace(/\s+/g, ''),
-        experience: experience.toUpperCase(),
+        experience,
         href: absoluteHref,
         bookingId,
         listingStatus: unavailable ? 'listed-unavailable' : 'bookable',
@@ -984,7 +993,7 @@ async function inspectSeats(browser, showtime) {
     throw new Error(`Seat map did not load for ${showtime.bookingId}; keeping the previous snapshot.`);
   }
 
-  return { ...showtime, ...seatMap };
+  return { ...showtime, ...seatMap, experience: seatMap.experience || showtime.experience };
 }
 
 async function runCycle() {
@@ -1014,7 +1023,7 @@ async function runCycle() {
         log(`Scanning showtimes for ${displayDate(dateYmd)}...`);
         const page = await discoverShowtimes(dateYmd);
         debug('discovered', dateYmd, page.showtimes);
-        log(`Found ${page.showtimes.length} ${CONFIG.experience} showtime(s) for ${displayDate(dateYmd)}.`);
+        log(`Found ${page.showtimes.length} ${formatExperienceLabel()} showtime(s) for ${displayDate(dateYmd)}.`);
         return page;
       } catch (error) {
         dateFailures.push({ dateYmd, message: error.message });
@@ -1043,7 +1052,7 @@ async function runCycle() {
             }
             pages.push(result.page);
             debug('browser-discovered', result.dateYmd, result.page.showtimes);
-            log(`Found ${result.page.showtimes.length} ${CONFIG.experience} showtime(s) for ${displayDate(result.dateYmd)}.`);
+            log(`Found ${result.page.showtimes.length} ${formatExperienceLabel()} showtime(s) for ${displayDate(result.dateYmd)}.`);
           }
           return pages;
         } catch (error) {
@@ -1172,13 +1181,13 @@ async function runCycle() {
 
       for (const showtime of seatShowtimes) {
         try {
-          log(`Reading seats for ${displayDate(showtime.date)} ${showtime.time} (${showtime.bookingId})...`);
+          log(`Reading seats for ${displayDate(showtime.date)} ${showtime.experience} ${showtime.time} (${showtime.bookingId})...`);
           const seatInfo = enrichSeatInfo(await inspectSeats(browser, showtime));
           checked.push(seatInfo);
           if (seatInfo.seatCount === 0 && seatInfo.soldOut) {
-            log(`Seat result for ${displayDate(showtime.date)} ${showtime.time}: unavailable/sold out, 0 in interested range.`);
+            log(`Seat result for ${displayDate(showtime.date)} ${showtime.experience} ${showtime.time}: unavailable/sold out, 0 in interested range.`);
           } else {
-            log(`Seat result for ${displayDate(showtime.date)} ${showtime.time}: ${seatInfo.available}/${seatInfo.seatCount} available, ${seatInfo.interestedAvailable} in interested range.`);
+            log(`Seat result for ${displayDate(showtime.date)} ${showtime.experience} ${showtime.time}: ${seatInfo.available}/${seatInfo.seatCount} available, ${seatInfo.interestedAvailable} in interested range, ${seatInfo.priorityAvailable} target.`);
           }
 
           const snapshotKey = showtime.key;
@@ -1199,7 +1208,7 @@ async function runCycle() {
             if (canSendTelegram()) {
               await sendTelegram(interestedMessage);
               state.hasSentBaseline = true;
-              log(`Sent interested-seat alert for ${displayDate(seatInfo.date)} ${seatInfo.time}: ${formatSeatList(seatInfo.interestedAvailableSeats, 28)}.`);
+              log(`Sent interested-seat alert for ${displayDate(seatInfo.date)} ${seatInfo.experience} ${seatInfo.time}: ${formatSeatList(seatInfo.interestedAvailableSeats, 28)}.`);
             } else {
               alerts.push(interestedMessage.replace(/\n/g, ' | '));
             }
@@ -1215,7 +1224,7 @@ async function runCycle() {
             if (canSendTelegram()) {
               await sendTelegram(priorityMessage);
               state.hasSentBaseline = true;
-              log(`Sent priority-seat alert for ${displayDate(seatInfo.date)} ${seatInfo.time}: ${formatSeatList(seatInfo.priorityAvailableSeats, 20)}.`);
+              log(`Sent priority-seat alert for ${displayDate(seatInfo.date)} ${seatInfo.experience} ${seatInfo.time}: ${formatSeatList(seatInfo.priorityAvailableSeats, 20)}.`);
             } else {
               alerts.push(priorityMessage.replace(/\n/g, ' | '));
             }
@@ -1276,6 +1285,19 @@ function normalizeAutoSeatCheckMode(value) {
 function normalizeShowtimeFetchMode(value) {
   const normalized = String(value || '').trim().toLowerCase();
   return ['http', 'browser'].includes(normalized) ? normalized : 'http';
+}
+
+function normalizeExperienceKey(value) {
+  return normalize(value).toUpperCase();
+}
+
+function isWantedExperience(value) {
+  const wanted = new Set(CONFIG.experiences.map(normalizeExperienceKey));
+  return wanted.has(normalizeExperienceKey(value));
+}
+
+function formatExperienceLabel() {
+  return CONFIG.experiences.join('/');
 }
 
 function getCheckDateInput() {
@@ -1536,7 +1558,7 @@ async function runRequestedDateCheck(dateYmd) {
   const failures = [];
   let browser = null;
 
-  await sendTelegramOrLog(`Checking ${displayDate(dateYmd)} now for ${CONFIG.movie} ${CONFIG.experience}.\nI will send matching interested seats immediately as each seat map is read.`);
+  await sendTelegramOrLog(`Checking ${displayDate(dateYmd)} now for ${CONFIG.movie} ${formatExperienceLabel()}.\nI will send matching interested/target seats immediately as each seat map is read.`);
   log(`Telegram command requested date check for ${displayDate(dateYmd)}.`);
 
   try {
@@ -1559,17 +1581,22 @@ async function runRequestedDateCheck(dateYmd) {
 
     for (const showtime of seatShowtimes) {
       try {
-        log(`Command reading seats for ${displayDate(showtime.date)} ${showtime.time} (${showtime.bookingId})...`);
+        log(`Command reading seats for ${displayDate(showtime.date)} ${showtime.experience} ${showtime.time} (${showtime.bookingId})...`);
         const seatInfo = enrichSeatInfo(await inspectSeats(browser, showtime));
         checked.push(seatInfo);
 
         if (seatInfo.interestedAvailable > 0) {
           await sendTelegramOrLog(formatInterestedSeatMessage(seatInfo, 'REQUESTED DATE SEATS AVAILABLE'));
-          log(`Sent requested-date interested seats for ${displayDate(seatInfo.date)} ${seatInfo.time}: ${formatSeatList(seatInfo.interestedAvailableSeats, 28)}.`);
+          log(`Sent requested-date interested seats for ${displayDate(seatInfo.date)} ${seatInfo.experience} ${seatInfo.time}: ${formatSeatList(seatInfo.interestedAvailableSeats, 28)}.`);
+        }
+
+        if (seatInfo.priorityAvailable > 0) {
+          await sendTelegramOrLog(formatPrioritySeatMessage(seatInfo));
+          log(`Sent requested-date target seats for ${displayDate(seatInfo.date)} ${seatInfo.experience} ${seatInfo.time}: ${formatSeatList(seatInfo.priorityAvailableSeats, 20)}.`);
         }
       } catch (error) {
         failures.push({ showtime, error });
-        log(`Command seat read failed for ${displayDate(showtime.date)} ${showtime.time}: ${error.message}`);
+        log(`Command seat read failed for ${displayDate(showtime.date)} ${showtime.experience} ${showtime.time}: ${error.message}`);
       }
     }
 
@@ -1589,7 +1616,10 @@ function dedupeShowtimes(showtimes) {
 }
 
 function compareShowtimes(a, b) {
-  return a.date.localeCompare(b.date) || timeToMinutes(a.time) - timeToMinutes(b.time) || a.time.localeCompare(b.time);
+  return a.date.localeCompare(b.date)
+    || timeToMinutes(a.time) - timeToMinutes(b.time)
+    || String(a.experience || '').localeCompare(String(b.experience || ''))
+    || a.time.localeCompare(b.time);
 }
 
 function timeToMinutes(time) {
@@ -1626,15 +1656,17 @@ function isSeatInInterestedRange(seat) {
   return CONFIG.interestedRows.includes(normalized.row) && normalized.number >= lower && normalized.number <= upper;
 }
 
-function isPrioritySeat(seat) {
+function isPrioritySeatForExperience(seat, experience) {
   const normalized = normalizeSeat(seat);
-  return CONFIG.prioritySeatKeys.has(`${normalized.row}-${normalized.number}`);
+  const key = `${normalized.row}-${normalized.number}`;
+  if (normalizeExperienceKey(experience) === 'STANDARD') return CONFIG.standardPrioritySeatKeys.has(key);
+  return CONFIG.prioritySeatKeys.has(key);
 }
 
 function enrichSeatInfo(seatInfo) {
   const availableSeats = (seatInfo.availableSeats || []).map(normalizeSeat);
   const interestedAvailableSeats = availableSeats.filter(isSeatInInterestedRange);
-  const priorityAvailableSeats = availableSeats.filter(isPrioritySeat);
+  const priorityAvailableSeats = availableSeats.filter((seat) => isPrioritySeatForExperience(seat, seatInfo.experience));
 
   return {
     ...seatInfo,
@@ -1648,6 +1680,10 @@ function enrichSeatInfo(seatInfo) {
 
 function formatInterestedRange() {
   return `rows ${CONFIG.interestedRows.join('/')} seats ${CONFIG.interestedMaxSeat}..${CONFIG.interestedMinSeat}`;
+}
+
+function formatPriorityRanges() {
+  return 'IMAX H/J/K seats 16..12; Standard B/C/D seats 8..1';
 }
 
 function formatSeatList(availableSeats, max = 28) {
@@ -1679,11 +1715,12 @@ function formatCommandStatus() {
   const state = loadState();
   const dates = buildTargetDates();
   return [
-    `VOX ${CONFIG.movie} ${CONFIG.experience} status`,
+    `VOX ${CONFIG.movie} ${formatExperienceLabel()} status`,
     `Mode: ${CONFIG.commandOnly ? 'command-only; no automatic VOX scans' : 'automatic scan loop'}`,
     `Last normal run: ${state.lastRunAt || 'not recorded yet'}`,
     `Date window: ${displayDate(dates[0])} to ${displayDate(dates[dates.length - 1])}`,
     `Interested: ${formatInterestedRange()}`,
+    `Targets: ${formatPriorityRanges()}`,
     `Poll: every ${CONFIG.pollMinutes} minute(s)`,
     `Commands: ${CONFIG.telegramCommands ? 'enabled' : 'disabled'}`,
   ].join('\n');
@@ -1692,7 +1729,7 @@ function formatCommandStatus() {
 function formatRequestedDateNoShowtimesMessage(dateYmd) {
   return [
     'REQUESTED DATE CHECK',
-    `${displayDate(dateYmd)} - ${CONFIG.movie} ${CONFIG.experience}`,
+    `${displayDate(dateYmd)} - ${CONFIG.movie} ${formatExperienceLabel()}`,
     'No matching showtimes found yet.',
     `Showtimes: ${showtimesUrl(dateYmd)}`,
   ].join('\n');
@@ -1701,10 +1738,10 @@ function formatRequestedDateNoShowtimesMessage(dateYmd) {
 function formatRequestedDateShowtimesMessage(dateYmd, showtimes) {
   const lines = [];
   lines.push('REQUESTED DATE SHOWTIMES');
-  lines.push(`${displayDate(dateYmd)} - ${CONFIG.movie} ${CONFIG.experience}`);
+  lines.push(`${displayDate(dateYmd)} - ${CONFIG.movie} ${formatExperienceLabel()}`);
   lines.push(`${showtimes.length} showtime(s) found. Checking seats now.`);
   for (const showtime of showtimes.sort(compareShowtimes)) {
-    lines.push(`- ${showtime.time}: ${showtime.listingStatus}`);
+    lines.push(`- ${showtime.experience} ${showtime.time}: ${showtime.listingStatus}`);
     if (showtime.bookingId) lines.push(`  Booking: ${bookingUrl(showtime)}`);
     else lines.push('  Booking: no link yet');
   }
@@ -1714,37 +1751,48 @@ function formatRequestedDateShowtimesMessage(dateYmd, showtimes) {
 function formatRequestedDateResultMessage(dateYmd, showtimes, checked, failures, startedMs) {
   const lines = [];
   const interestingShowtimes = checked.filter((showtime) => showtime.interestedAvailable > 0);
+  const targetShowtimes = checked.filter((showtime) => showtime.priorityAvailable > 0);
   const checkedByKey = new Map(checked.map((seatInfo) => [seatInfo.key, seatInfo]));
 
   lines.push('REQUESTED DATE CHECK DONE');
-  lines.push(`${displayDate(dateYmd)} - ${CONFIG.movie} ${CONFIG.experience}`);
+  lines.push(`${displayDate(dateYmd)} - ${CONFIG.movie} ${formatExperienceLabel()}`);
   lines.push(`Showtimes: ${showtimes.length}, seat checks: ${checked.length}`);
+
+  if (targetShowtimes.length) {
+    lines.push('');
+    lines.push('Target seats found:');
+    for (const seatInfo of targetShowtimes.sort(compareShowtimes)) {
+      lines.push(`- ${seatInfo.experience} ${seatInfo.time}: ${seatInfo.priorityAvailable} target seat(s)`);
+      lines.push(`  Seats: ${formatSeatList(seatInfo.priorityAvailableSeats, 20)}`);
+      lines.push(`  Booking: ${bookingUrl(seatInfo)}`);
+    }
+  }
 
   if (interestingShowtimes.length) {
     lines.push('');
     lines.push('Interested seats found:');
     for (const seatInfo of interestingShowtimes.sort(compareShowtimes)) {
-      lines.push(`- ${seatInfo.time}: ${seatInfo.interestedAvailable} interested seat(s)`);
+      lines.push(`- ${seatInfo.experience} ${seatInfo.time}: ${seatInfo.interestedAvailable} interested seat(s)`);
       lines.push(`  Seats: ${formatSeatList(seatInfo.interestedAvailableSeats, 28)}`);
       lines.push(`  Booking: ${bookingUrl(seatInfo)}`);
     }
-  } else {
+  } else if (!targetShowtimes.length) {
     lines.push('');
-    lines.push(`No seats found in ${formatInterestedRange()}.`);
+    lines.push(`No seats found in ${formatInterestedRange()} or target ranges (${formatPriorityRanges()}).`);
   }
 
   lines.push('');
   lines.push('All showtimes:');
   for (const showtime of showtimes.sort(compareShowtimes)) {
     const seatInfo = checkedByKey.get(showtime.key);
-    lines.push(`- ${showtime.time}: ${seatInfo ? formatSeatCheckStatus(seatInfo) : showtime.listingStatus}`);
+    lines.push(`- ${showtime.experience} ${showtime.time}: ${seatInfo ? formatSeatCheckStatus(seatInfo) : showtime.listingStatus}`);
     if (showtime.bookingId) lines.push(`  Booking: ${bookingUrl(showtime)}`);
   }
 
   if (failures.length) {
     lines.push('');
     lines.push('Could not read:');
-    for (const failure of failures) lines.push(`- ${failure.showtime.time}: ${failure.error.message}`);
+    for (const failure of failures) lines.push(`- ${failure.showtime.experience} ${failure.showtime.time}: ${failure.error.message}`);
   }
 
   lines.push('');
@@ -1754,16 +1802,16 @@ function formatRequestedDateResultMessage(dateYmd, showtimes, checked, failures,
 
 function formatSeatCheckStatus(seatInfo) {
   if (seatInfo.seatCount === 0 && seatInfo.soldOut) return 'unavailable/sold out';
-  return `${seatInfo.available}/${seatInfo.seatCount} available, ${seatInfo.interestedAvailable} interested`;
+  return `${seatInfo.available}/${seatInfo.seatCount} available, ${seatInfo.interestedAvailable} interested, ${seatInfo.priorityAvailable} target`;
 }
 
 function formatNewDateMessage(date, dayShowtimes) {
   const lines = [];
   lines.push('NEW DATE RELEASED');
-  lines.push(`${displayDate(date)} - ${CONFIG.movie} ${CONFIG.experience}`);
+  lines.push(`${displayDate(date)} - ${CONFIG.movie} ${formatExperienceLabel()}`);
   lines.push(`${dayShowtimes.length} showtime(s)`);
   for (const showtime of dayShowtimes.sort(compareShowtimes)) {
-    lines.push(`- ${showtime.time}: ${showtime.listingStatus}`);
+    lines.push(`- ${showtime.experience} ${showtime.time}: ${showtime.listingStatus}`);
     if (showtime.bookingId) lines.push(`  Booking: ${bookingUrl(showtime)}`);
     else lines.push('  Booking: no link yet');
   }
@@ -1774,7 +1822,7 @@ function formatInterestedSeatMessage(seatInfo, title = 'INTERESTED SEATS AVAILAB
   const lines = [];
   lines.push(title);
   lines.push(`${displayDate(seatInfo.date)} ${seatInfo.time}`);
-  lines.push(`${seatInfo.experience || CONFIG.experience}${seatInfo.screen ? ` - ${seatInfo.screen}` : ''}`);
+  lines.push(`${seatInfo.experience || formatExperienceLabel()}${seatInfo.screen ? ` - ${seatInfo.screen}` : ''}`);
   lines.push(`Range: ${formatInterestedRange()}`);
   lines.push(`Seats: ${formatSeatList(seatInfo.interestedAvailableSeats, 28)}`);
   lines.push(`Booking: ${bookingUrl(seatInfo)}`);
@@ -1785,7 +1833,7 @@ function formatPrioritySeatMessage(seatInfo) {
   const lines = [];
   lines.push('TARGET SEATS AVAILABLE');
   lines.push(`${displayDate(seatInfo.date)} ${seatInfo.time}`);
-  lines.push(`${seatInfo.experience || CONFIG.experience}${seatInfo.screen ? ` - ${seatInfo.screen}` : ''}`);
+  lines.push(`${seatInfo.experience || formatExperienceLabel()}${seatInfo.screen ? ` - ${seatInfo.screen}` : ''}`);
   lines.push(`Seats: ${formatSeatList(seatInfo.priorityAvailableSeats, 20)}`);
   lines.push(`Booking: ${bookingUrl(seatInfo)}`);
   return lines.join('\n');
@@ -1795,10 +1843,10 @@ function formatSummary(startedAt, targetDates, checked, discovered, alerts) {
   const lines = [];
   const firstDate = targetDates[0] || '';
   const lastDate = targetDates[targetDates.length - 1] || '';
-  lines.push(`VOX ${CONFIG.movie} ${CONFIG.experience} monitor`);
+  lines.push(`VOX ${CONFIG.movie} ${formatExperienceLabel()} monitor`);
   lines.push(`Checked: ${startedAt}`);
   lines.push(`Date scan: ${displayDate(firstDate)} to ${displayDate(lastDate)} (${targetDates.length} day(s))`);
-  lines.push(`Found: ${discovered.length} listed ${CONFIG.experience} slot(s), ${checked.length} seat check(s)`);
+  lines.push(`Found: ${discovered.length} listed ${formatExperienceLabel()} slot(s), ${checked.length} seat check(s)`);
 
   if (alerts.length) {
     lines.push('');
@@ -1812,7 +1860,7 @@ function formatSummary(startedAt, targetDates, checked, discovered, alerts) {
       lines.push('');
       lines.push(`Seat maps (${formatInterestedRange()}):`);
       for (const showtime of interestingShowtimes) {
-        lines.push(`- ${displayDate(showtime.date)} ${showtime.time}: ${showtime.interestedAvailable} interested seat(s) available`);
+        lines.push(`- ${displayDate(showtime.date)} ${showtime.experience} ${showtime.time}: ${showtime.interestedAvailable} interested seat(s) available`);
         lines.push(`  Seats: ${formatSeatList(showtime.interestedAvailableSeats)}`);
         lines.push(`  Booking: ${bookingUrl(showtime)}`);
       }
@@ -1821,7 +1869,7 @@ function formatSummary(startedAt, targetDates, checked, discovered, alerts) {
     lines.push('');
     lines.push('Listed showtimes:');
     for (const showtime of discovered) {
-      lines.push(`- ${displayDate(showtime.date)} ${showtime.time}: ${showtime.listingStatus}`);
+      lines.push(`- ${displayDate(showtime.date)} ${showtime.experience} ${showtime.time}: ${showtime.listingStatus}`);
     }
   } else {
     lines.push('');

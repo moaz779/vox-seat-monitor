@@ -47,6 +47,8 @@ jobs:
           VOX_CITY: city-centre-almaza
           VOX_MOVIE: the-odyssey
           VOX_EXPERIENCE: IMAX
+          VOX_EXPERIENCES: IMAX,Standard
+          VOX_STANDARD_PRIORITY_SEATS: B:8,7,6,5,4,3,2,1;C:8,7,6,5,4,3,2,1;D:8,7,6,5,4,3,2,1
           VOX_STATE_FILE: github-state/state.json
           VOX_LOOKAHEAD_DAYS: "21"
           VOX_PARALLEL_DATE_SCANS: "4"
