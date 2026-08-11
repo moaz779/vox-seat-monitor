@@ -84,3 +84,4 @@ This sends showtimes first, then interested-seat alerts as seat maps are read.
 - GitHub's shortest scheduled interval is 5 minutes.
 - GitHub schedules can be delayed sometimes, so this is not as instant as a real VPS.
 - The first GitHub run starts with a new `github-state/state.json`, so it may send an initial baseline alert.
+- If you update the workflow, start a fresh run from **Actions -> VOX Seat Monitor -> Run workflow**. Do not use **Re-run jobs** on an old failed run, because that reuses the old commit.

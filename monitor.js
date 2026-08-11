@@ -21,6 +21,8 @@ const CONFIG = {
   pageWaitMs: numberEnv('VOX_PAGE_WAIT_MS', 10000),
   bookingWaitMs: numberEnv('VOX_BOOKING_WAIT_MS', 20000),
   httpTimeoutMs: numberEnv('VOX_HTTP_TIMEOUT_MS', 10000),
+  httpRetries: numberEnv('VOX_HTTP_RETRIES', 0, { allowZero: true }),
+  httpRetryDelayMs: numberEnv('VOX_HTTP_RETRY_DELAY_MS', 1000),
   parallelDateScans: numberEnv('VOX_PARALLEL_DATE_SCANS', 6),
   domWaitIntervalMs: numberEnv('VOX_DOM_WAIT_INTERVAL_MS', 250),
   cdpTimeoutMs: numberEnv('VOX_CDP_TIMEOUT_MS', 45000),
@@ -315,6 +317,22 @@ function htmlAttribute(source, name) {
 }
 
 async function fetchText(url) {
+  let lastError = null;
+  for (let attempt = 0; attempt <= CONFIG.httpRetries; attempt++) {
+    try {
+      return await fetchTextAttempt(url);
+    } catch (error) {
+      lastError = normalizeFetchError(error);
+      if (attempt >= CONFIG.httpRetries || !isRetryableFetchError(lastError)) throw lastError;
+      const waitMs = CONFIG.httpRetryDelayMs * (attempt + 1);
+      log(`Retrying ${url} after ${lastError.message}; attempt ${attempt + 2}/${CONFIG.httpRetries + 1} in ${waitMs}ms.`);
+      await sleep(waitMs);
+    }
+  }
+  throw lastError;
+}
+
+async function fetchTextAttempt(url) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), CONFIG.httpTimeoutMs);
 
@@ -341,6 +359,16 @@ async function fetchText(url) {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function normalizeFetchError(error) {
+  if (error.name === 'AbortError') return new Error(`HTTP request timed out after ${CONFIG.httpTimeoutMs}ms`);
+  return error;
+}
+
+function isRetryableFetchError(error) {
+  const message = String(error && error.message || error || '');
+  return /timed out|fetch failed|ECONN|ETIMEDOUT|ECONNRESET|ENOTFOUND|HTTP 429|HTTP 5\d\d/i.test(message);
 }
 
 function parseShowtimesHtml(html, dateYmd, sourceUrl) {
@@ -812,6 +840,7 @@ async function runCycle() {
   const discovered = [];
   const checked = [];
   const alerts = [];
+  const dateFailures = [];
   const seatCheckReasons = new Map();
   const markSeatCheck = (showtime, reason) => {
     if (!showtime.bookingId) return;
@@ -830,11 +859,13 @@ async function runCycle() {
         log(`Found ${page.showtimes.length} ${CONFIG.experience} showtime(s) for ${displayDate(dateYmd)}.`);
         return page;
       } catch (error) {
-        alerts.push(`Could not read showtimes for ${dateYmd}: ${error.message}`);
+        dateFailures.push({ dateYmd, message: error.message });
         log(`Showtime scan failed for ${displayDate(dateYmd)}: ${error.message}`);
         return null;
       }
     });
+
+    appendDateFailureAlerts(alerts, dateFailures, targetDates.length);
 
     for (const page of datePages.filter(Boolean)) {
       discovered.push(...page.showtimes);
@@ -1074,6 +1105,23 @@ function summarizeSeatCheckReasons(entries) {
     .sort((a, b) => a[0].localeCompare(b[0]))
     .map(([reason, count]) => `${count} ${reason}`)
     .join(', ');
+}
+
+function appendDateFailureAlerts(alerts, dateFailures, targetDateCount) {
+  if (!dateFailures.length) return;
+
+  const first = dateFailures[0];
+  if (dateFailures.length === targetDateCount) {
+    alerts.push(`SHOWTIME SCAN WARNING: Could not read any of ${targetDateCount} date page(s) from VOX. First failure: ${displayDate(first.dateYmd)} - ${first.message}. GitHub will retry on the next scheduled run.`);
+    return;
+  }
+
+  const sample = dateFailures
+    .slice(0, 4)
+    .map((failure) => `${displayDate(failure.dateYmd)} (${failure.message})`)
+    .join('; ');
+  const more = dateFailures.length > 4 ? `; +${dateFailures.length - 4} more` : '';
+  alerts.push(`SHOWTIME SCAN WARNING: ${dateFailures.length}/${targetDateCount} date page(s) failed: ${sample}${more}.`);
 }
 
 async function startTelegramCommandLoop() {

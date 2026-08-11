@@ -49,8 +49,10 @@ jobs:
           VOX_EXPERIENCE: IMAX
           VOX_STATE_FILE: github-state/state.json
           VOX_LOOKAHEAD_DAYS: "21"
-          VOX_PARALLEL_DATE_SCANS: "6"
-          VOX_HTTP_TIMEOUT_MS: "10000"
+          VOX_PARALLEL_DATE_SCANS: "3"
+          VOX_HTTP_TIMEOUT_MS: "25000"
+          VOX_HTTP_RETRIES: "1"
+          VOX_HTTP_RETRY_DELAY_MS: "1500"
           VOX_PAGE_WAIT_MS: "10000"
           VOX_BOOKING_WAIT_MS: "20000"
           VOX_BLOCK_ASSETS: "1"
