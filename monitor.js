@@ -1649,7 +1649,9 @@ function normalizeSeat(seat) {
   };
 }
 
-function isSeatInInterestedRange(seat) {
+function isSeatInInterestedRange(seat, experience) {
+  if (normalizeExperienceKey(experience) === 'STANDARD') return false;
+
   const normalized = normalizeSeat(seat);
   const lower = Math.min(CONFIG.interestedMinSeat, CONFIG.interestedMaxSeat);
   const upper = Math.max(CONFIG.interestedMinSeat, CONFIG.interestedMaxSeat);
@@ -1665,7 +1667,7 @@ function isPrioritySeatForExperience(seat, experience) {
 
 function enrichSeatInfo(seatInfo) {
   const availableSeats = (seatInfo.availableSeats || []).map(normalizeSeat);
-  const interestedAvailableSeats = availableSeats.filter(isSeatInInterestedRange);
+  const interestedAvailableSeats = availableSeats.filter((seat) => isSeatInInterestedRange(seat, seatInfo.experience));
   const priorityAvailableSeats = availableSeats.filter((seat) => isPrioritySeatForExperience(seat, seatInfo.experience));
 
   return {
@@ -1679,7 +1681,7 @@ function enrichSeatInfo(seatInfo) {
 }
 
 function formatInterestedRange() {
-  return `rows ${CONFIG.interestedRows.join('/')} seats ${CONFIG.interestedMaxSeat}..${CONFIG.interestedMinSeat}`;
+  return `IMAX rows ${CONFIG.interestedRows.join('/')} seats ${CONFIG.interestedMaxSeat}..${CONFIG.interestedMinSeat}`;
 }
 
 function formatPriorityRanges() {

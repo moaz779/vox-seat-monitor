@@ -189,7 +189,7 @@ Seat types are inferred from VOX's seat CSS classes. The script reports `Premium
 
 ## Seat Rules
 
-Normal Telegram seat updates only include:
+Normal Telegram seat updates only apply to IMAX and only include:
 
 ```text
 Rows E/F/G/H/J/K/L, seat numbers 18 through 7
@@ -221,3 +221,4 @@ VOX_STANDARD_PRIORITY_SEATS=B:8,7,6,5,4,3,2,1;C:8,7,6,5,4,3,2,1;D:8,7,6,5,4,3,2,
 ```
 
 Sold-out and zero-interest-seat results are kept quiet in Telegram.
+Standard showtimes do not use the IMAX interested range; they only send target-seat alerts for B/C/D seats 8 through 1.
