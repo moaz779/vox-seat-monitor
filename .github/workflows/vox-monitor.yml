@@ -1,8 +1,6 @@
 name: VOX Seat Monitor
 
 on:
-  schedule:
-    - cron: "*/5 * * * *"
   workflow_dispatch:
     inputs:
       check_date:

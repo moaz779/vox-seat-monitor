@@ -44,6 +44,7 @@ const CONFIG = {
   telegramCommandTimeoutSeconds: numberEnv('VOX_TELEGRAM_COMMAND_TIMEOUT_SECONDS', 25),
   sendEveryCheck: boolEnv('VOX_SEND_EVERY_CHECK', false),
   notifySeatChanges: boolEnv('VOX_NOTIFY_SEAT_CHANGES', true),
+  commandOnly: boolEnv('VOX_COMMAND_ONLY', false),
   autoSeatCheckMode: env('VOX_AUTO_SEAT_CHECK_MODE', 'release').toLowerCase(),
   fullSeatCheckEveryMinutes: numberEnv('VOX_FULL_SEAT_CHECK_EVERY_MINUTES', 0, { allowZero: true }),
   skipUnavailableListings: boolEnv('VOX_SKIP_UNAVAILABLE_LISTINGS', false),
@@ -1657,7 +1658,7 @@ function bookingUrl(showtime) {
 
 function telegramCommandHelp() {
   return [
-    'VOX monitor commands',
+    CONFIG.commandOnly ? 'VOX monitor commands - command-only mode' : 'VOX monitor commands',
     '/check 13/8 - check one date now',
     '/check 2026-08-13 - same with full date',
     '/date 13/8 - alias for /check',
@@ -1673,6 +1674,7 @@ function formatCommandStatus() {
   const dates = buildTargetDates();
   return [
     `VOX ${CONFIG.movie} ${CONFIG.experience} status`,
+    `Mode: ${CONFIG.commandOnly ? 'command-only; no automatic VOX scans' : 'automatic scan loop'}`,
     `Last normal run: ${state.lastRunAt || 'not recorded yet'}`,
     `Date window: ${displayDate(dates[0])} to ${displayDate(dates[dates.length - 1])}`,
     `Interested: ${formatInterestedRange()}`,
@@ -1890,6 +1892,14 @@ async function main() {
   if (ONCE) {
     await runCycle();
     finishOneShot();
+    return;
+  }
+
+  if (CONFIG.commandOnly) {
+    if (!CONFIG.telegramCommands) throw new Error('VOX_COMMAND_ONLY=1 requires VOX_TELEGRAM_COMMANDS=1.');
+    if (!canSendTelegram()) throw new Error('VOX_COMMAND_ONLY=1 requires TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.');
+    log('Command-only mode enabled. No automatic VOX scans will run; send /check 13/8 in Telegram.');
+    await startTelegramCommandLoop();
     return;
   }
 

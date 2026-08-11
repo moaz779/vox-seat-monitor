@@ -26,7 +26,7 @@ cd C:\vox-seat-monitor
 node .\monitor.js
 ```
 
-Leave that terminal open. It checks every 5 minutes by default.
+Leave that terminal open. With `VOX_COMMAND_ONLY=1`, it only listens for Telegram commands and does not scan VOX automatically.
 
 ## Telegram
 
@@ -115,6 +115,8 @@ The script sends alerts when:
 - A booking link becomes available for a previously listed showtime.
 - Available seats change.
 
+With `VOX_COMMAND_ONLY=1`, these automatic alerts are disabled. The script checks VOX only after you send a Telegram command such as `/check 13/8`.
+
 Interested-seat alerts are sent immediately after that seat map is read, before the script continues to later showtimes in the same cycle.
 Newly released days are also sent immediately after the fast date scan, before any seat-map checks, with booking links for every listed showtime on that day.
 
@@ -160,6 +162,7 @@ $env:VOX_SHOWTIME_FETCH_MODE="http"
 $env:VOX_BLOCK_ASSETS="1"
 $env:VOX_SKIP_UNAVAILABLE_LISTINGS="0"
 $env:VOX_TELEGRAM_COMMANDS="1"
+$env:VOX_COMMAND_ONLY="1"
 $env:VOX_AUTO_SEAT_CHECK_MODE="release"
 $env:VOX_FULL_SEAT_CHECK_EVERY_MINUTES="0"
 $env:VOX_PERSIST_LAST_RUN="0"

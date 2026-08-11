@@ -53,7 +53,7 @@ Register-ScheduledTask `
   -Action $action `
   -Trigger $trigger `
   -Settings $settings `
-  -Description "Monitors VOX Cinemas for new IMAX days/showtimes and sends Telegram alerts." `
+  -Description "Runs the VOX Telegram command bot. In command-only mode it checks VOX only after Telegram requests." `
   -Force | Out-Null
 
 Start-ScheduledTask -TaskName $TaskName
