@@ -23,6 +23,7 @@ const CONFIG = {
   httpTimeoutMs: numberEnv('VOX_HTTP_TIMEOUT_MS', 10000),
   httpRetries: numberEnv('VOX_HTTP_RETRIES', 0, { allowZero: true }),
   httpRetryDelayMs: numberEnv('VOX_HTTP_RETRY_DELAY_MS', 1000),
+  abortDateScanOnFirstFailure: boolEnv('VOX_ABORT_SCAN_ON_FIRST_DATE_FAILURE', false),
   parallelDateScans: numberEnv('VOX_PARALLEL_DATE_SCANS', 6),
   domWaitIntervalMs: numberEnv('VOX_DOM_WAIT_INTERVAL_MS', 250),
   cdpTimeoutMs: numberEnv('VOX_CDP_TIMEOUT_MS', 45000),
@@ -858,7 +859,7 @@ async function runCycle() {
   };
 
   try {
-    const datePages = await mapWithConcurrency(targetDates, CONFIG.parallelDateScans, async (dateYmd) => {
+    const scanDatePage = async (dateYmd) => {
       try {
         log(`Scanning showtimes for ${displayDate(dateYmd)}...`);
         const page = await discoverShowtimes(dateYmd);
@@ -870,9 +871,25 @@ async function runCycle() {
         log(`Showtime scan failed for ${displayDate(dateYmd)}: ${error.message}`);
         return null;
       }
-    });
+    };
 
-    appendDateFailureAlerts(alerts, dateFailures, targetDates.length, state);
+    let abortedDateScan = false;
+    let datePages = [];
+    if (CONFIG.abortDateScanOnFirstFailure && targetDates.length) {
+      const [firstDate, ...remainingDates] = targetDates;
+      const firstPage = await scanDatePage(firstDate);
+      if (!firstPage) {
+        abortedDateScan = true;
+        log(`Aborting remaining ${remainingDates.length} date scan(s) after first-date failure.`);
+      } else {
+        datePages.push(firstPage);
+        datePages.push(...await mapWithConcurrency(remainingDates, CONFIG.parallelDateScans, scanDatePage));
+      }
+    } else {
+      datePages = await mapWithConcurrency(targetDates, CONFIG.parallelDateScans, scanDatePage);
+    }
+
+    appendDateFailureAlerts(alerts, dateFailures, targetDates.length, state, { abortedDateScan });
 
     for (const page of datePages.filter(Boolean)) {
       discovered.push(...page.showtimes);
@@ -1114,7 +1131,7 @@ function summarizeSeatCheckReasons(entries) {
     .join(', ');
 }
 
-function appendDateFailureAlerts(alerts, dateFailures, targetDateCount, state) {
+function appendDateFailureAlerts(alerts, dateFailures, targetDateCount, state, options = {}) {
   if (!dateFailures.length) {
     if (state.lastDateScanFailureSignature) state.lastDateScanFailureSignature = null;
     return;
@@ -1122,10 +1139,13 @@ function appendDateFailureAlerts(alerts, dateFailures, targetDateCount, state) {
 
   const first = dateFailures[0];
   const allFailed = dateFailures.length === targetDateCount;
+  const abortedDateScan = !!options.abortedDateScan;
   const normalizedFirstMessage = normalizeFailureMessage(first.message);
-  const signature = allFailed
-    ? `all|${targetDateCount}|${normalizedFirstMessage}`
-    : `partial|${dateFailures.length}|${normalizedFirstMessage}`;
+  const signature = abortedDateScan
+    ? `aborted|${targetDateCount}|${normalizedFirstMessage}`
+    : allFailed
+      ? `all|${targetDateCount}|${normalizedFirstMessage}`
+      : `partial|${dateFailures.length}|${normalizedFirstMessage}`;
 
   if (state.lastDateScanFailureSignature === signature) {
     log(`Suppressing repeated showtime scan warning: ${signature}`);
@@ -1133,6 +1153,11 @@ function appendDateFailureAlerts(alerts, dateFailures, targetDateCount, state) {
   }
 
   state.lastDateScanFailureSignature = signature;
+
+  if (abortedDateScan) {
+    alerts.push(`SHOWTIME SCAN WARNING: GitHub could not read VOX's first date page (${displayDate(first.dateYmd)}): ${first.message}. Skipped the remaining ${Math.max(0, targetDateCount - 1)} date(s) to keep this run fast; GitHub will retry on the next scheduled run.`);
+    return;
+  }
 
   if (allFailed) {
     alerts.push(`SHOWTIME SCAN WARNING: Could not read any of ${targetDateCount} date page(s) from VOX. First failure: ${displayDate(first.dateYmd)} - ${first.message}. GitHub will retry on the next scheduled run.`);
