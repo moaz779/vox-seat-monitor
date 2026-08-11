@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const http = require('http');
 const os = require('os');
@@ -374,6 +374,40 @@ function isRetryableFetchError(error) {
   return /timed out|fetch failed|ECONN|ETIMEDOUT|ECONNRESET|ENOTFOUND|HTTP 429|HTTP 5\d\d/i.test(message);
 }
 
+async function stopProcessTree(child) {
+  if (!child || !child.pid) return;
+
+  if (process.platform === 'win32') {
+    try {
+      spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+    } catch {}
+  } else {
+    try {
+      child.kill('SIGTERM');
+    } catch {}
+  }
+
+  const exited = await waitForProcessExit(child, 1500);
+  if (!exited && process.platform !== 'win32') {
+    try {
+      child.kill('SIGKILL');
+    } catch {}
+    await waitForProcessExit(child, 1000);
+  }
+
+  try {
+    child.unref();
+  } catch {}
+}
+
+function waitForProcessExit(child, timeoutMs) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true);
+  return Promise.race([
+    new Promise((resolve) => child.once('exit', () => resolve(true))),
+    sleep(timeoutMs).then(() => false),
+  ]);
+}
+
 function parseShowtimesHtml(html, dateYmd, sourceUrl) {
   const wantedExperience = CONFIG.experience.toLowerCase();
   const showtimes = [];
@@ -571,10 +605,12 @@ class ChromeSession {
     try {
       if (this.websocket) this.websocket.close();
     } catch {}
-    try {
-      if (this.process) this.process.kill();
-    } catch {}
-    await sleep(1000);
+    await stopProcessTree(this.process);
+    this.websocket = null;
+    this.process = null;
+    this.pending.clear();
+    this.networkRequests.clear();
+    await sleep(500);
     try {
       fs.rmSync(this.userDataDir, { recursive: true, force: true });
     } catch {}
