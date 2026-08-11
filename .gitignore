@@ -1,0 +1,5 @@
+.env
+state.json
+telegram-offset.json
+network-measurements.jsonl
+logs/

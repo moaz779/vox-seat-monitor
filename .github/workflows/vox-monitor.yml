@@ -1,0 +1,101 @@
+name: VOX Seat Monitor
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      check_date:
+        description: "Optional date for an immediate manual check, for example 13/8 or 2026-08-13"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: vox-seat-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Check runtime
+        run: |
+          node --version
+          node --check monitor.js
+          google-chrome --version || google-chrome-stable --version || chromium --version
+
+      - name: Run VOX monitor
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          VOX_CITY: city-centre-almaza
+          VOX_MOVIE: the-odyssey
+          VOX_EXPERIENCE: IMAX
+          VOX_STATE_FILE: github-state/state.json
+          VOX_LOOKAHEAD_DAYS: "21"
+          VOX_PARALLEL_DATE_SCANS: "6"
+          VOX_HTTP_TIMEOUT_MS: "10000"
+          VOX_PAGE_WAIT_MS: "10000"
+          VOX_BOOKING_WAIT_MS: "20000"
+          VOX_BLOCK_ASSETS: "1"
+          VOX_SKIP_UNAVAILABLE_LISTINGS: "0"
+          VOX_TELEGRAM_COMMANDS: "0"
+          VOX_SEND_EVERY_CHECK: "0"
+          VOX_AUTO_SEAT_CHECK_MODE: release
+          VOX_FULL_SEAT_CHECK_EVERY_MINUTES: "0"
+          VOX_PERSIST_LAST_RUN: "0"
+          VOX_PERSIST_SEEN_TIMESTAMPS: "0"
+          VOX_CHROME_NO_SANDBOX: "1"
+          REQUESTED_DATE: ${{ github.event.inputs.check_date }}
+        run: |
+          set -euo pipefail
+          mkdir -p github-state
+
+          if [ -z "${TELEGRAM_BOT_TOKEN:-}" ] || [ -z "${TELEGRAM_CHAT_ID:-}" ]; then
+            echo "TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID repository secrets are required." >&2
+            exit 1
+          fi
+
+          if [ -n "${REQUESTED_DATE:-}" ]; then
+            node monitor.js --check-date "$REQUESTED_DATE"
+          else
+            node monitor.js --once
+          fi
+
+      - name: Save monitor state
+        if: always()
+        run: |
+          set -euo pipefail
+
+          if [ ! -f github-state/state.json ]; then
+            echo "No monitor state file was produced."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add github-state/state.json
+
+          if git diff --cached --quiet; then
+            echo "No monitor state changes to commit."
+            exit 0
+          fi
+
+          git commit -m "Update VOX monitor state [skip ci]"
+          git pull --rebase --autostash
+          git push
