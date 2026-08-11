@@ -24,6 +24,8 @@ const CONFIG = {
   httpRetries: numberEnv('VOX_HTTP_RETRIES', 0, { allowZero: true }),
   httpRetryDelayMs: numberEnv('VOX_HTTP_RETRY_DELAY_MS', 1000),
   abortDateScanOnFirstFailure: boolEnv('VOX_ABORT_SCAN_ON_FIRST_DATE_FAILURE', false),
+  showtimeFetchMode: env('VOX_SHOWTIME_FETCH_MODE', 'http').toLowerCase(),
+  showtimeBrowserFetchTimeoutMs: numberEnv('VOX_SHOWTIME_BROWSER_FETCH_TIMEOUT_MS', 15000),
   parallelDateScans: numberEnv('VOX_PARALLEL_DATE_SCANS', 6),
   domWaitIntervalMs: numberEnv('VOX_DOM_WAIT_INTERVAL_MS', 250),
   cdpTimeoutMs: numberEnv('VOX_CDP_TIMEOUT_MS', 45000),
@@ -680,6 +682,19 @@ class ChromeSession {
     return result.result.value;
   }
 
+  async evaluateAsync(expression) {
+    const result = await this.send('Runtime.evaluate', {
+      expression,
+      returnByValue: true,
+      awaitPromise: true,
+    });
+    if (result.exceptionDetails) {
+      const description = result.exceptionDetails.exception?.description || result.exceptionDetails.text;
+      throw new Error(description);
+    }
+    return result.result.value;
+  }
+
   async waitForChrome() {
     for (let attempt = 0; attempt < 80; attempt++) {
       try {
@@ -732,6 +747,102 @@ async function discoverShowtimes(dateYmd) {
   const url = showtimesUrl(dateYmd);
   const response = await fetchText(url);
   return parseShowtimesHtml(response.text, dateYmd, response.url || url);
+}
+
+async function discoverShowtimesWithBrowser(browser, dateYmds) {
+  const requests = dateYmds.map((dateYmd) => ({ dateYmd, url: showtimesUrl(dateYmd) }));
+  if (!requests.length) return [];
+
+  await browser.navigateAndWait(
+    CONFIG.baseUrl,
+    CONFIG.pageWaitMs,
+    'document.body',
+    'showtime browser origin',
+  );
+
+  const script = `(() => {
+    const requests = ${JSON.stringify(requests)};
+    const timeoutMs = ${JSON.stringify(CONFIG.showtimeBrowserFetchTimeoutMs)};
+    const limit = ${JSON.stringify(Math.max(1, CONFIG.parallelDateScans))};
+
+    async function fetchOne(item) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const response = await fetch(item.url, {
+          signal: controller.signal,
+          cache: 'no-store',
+          credentials: 'include',
+          redirect: 'follow',
+          headers: {
+            Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Cache-Control': 'no-cache',
+            Pragma: 'no-cache'
+          }
+        });
+        const text = await response.text();
+        return {
+          dateYmd: item.dateYmd,
+          url: response.url || item.url,
+          ok: response.ok,
+          status: response.status,
+          text
+        };
+      } catch (error) {
+        return {
+          dateYmd: item.dateYmd,
+          url: item.url,
+          ok: false,
+          status: 0,
+          error: error && error.name === 'AbortError' ? 'Browser fetch timed out after ' + timeoutMs + 'ms' : String(error && error.message || error)
+        };
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+
+    return new Promise((resolve) => {
+      const results = new Array(requests.length);
+      let index = 0;
+      let active = 0;
+
+      function pump() {
+        while (active < limit && index < requests.length) {
+          const current = index++;
+          active++;
+          fetchOne(requests[current])
+            .then((result) => {
+              results[current] = result;
+            })
+            .catch((error) => {
+              results[current] = {
+                dateYmd: requests[current].dateYmd,
+                url: requests[current].url,
+                ok: false,
+                status: 0,
+                error: String(error && error.message || error)
+              };
+            })
+            .finally(() => {
+              active--;
+              if (index >= requests.length && active === 0) resolve(results);
+              else pump();
+            });
+        }
+      }
+
+      pump();
+    });
+  })()`;
+
+  const results = await browser.evaluateAsync(script);
+  return results.map((result, index) => {
+    const dateYmd = result?.dateYmd || requests[index]?.dateYmd || '';
+    if (!result || result.error) return { dateYmd, error: result?.error || 'Browser showtime fetch failed.' };
+    if (!result.ok) return { dateYmd, error: `Browser showtime fetch HTTP ${result.status}: ${normalize(stripHtml(result.text)).slice(0, 180)}` };
+    const page = parseShowtimesHtml(result.text, dateYmd, result.url);
+    return { dateYmd, page };
+  });
 }
 
 async function inspectSeats(browser, showtime) {
@@ -875,7 +986,48 @@ async function runCycle() {
 
     let abortedDateScan = false;
     let datePages = [];
-    if (CONFIG.abortDateScanOnFirstFailure && targetDates.length) {
+    if (normalizeShowtimeFetchMode(CONFIG.showtimeFetchMode) === 'browser') {
+      browser = new ChromeSession();
+      await browser.start();
+
+      const scanBrowserDatePages = async (dates) => {
+        if (!dates.length) return [];
+        log(`Browser-backed showtime scan for ${dates.length} date(s)...`);
+        try {
+          const results = await discoverShowtimesWithBrowser(browser, dates);
+          const pages = [];
+          for (const result of results) {
+            if (result.error) {
+              dateFailures.push({ dateYmd: result.dateYmd, message: result.error });
+              log(`Browser-backed showtime scan failed for ${displayDate(result.dateYmd)}: ${result.error}`);
+              continue;
+            }
+            pages.push(result.page);
+            debug('browser-discovered', result.dateYmd, result.page.showtimes);
+            log(`Found ${result.page.showtimes.length} ${CONFIG.experience} showtime(s) for ${displayDate(result.dateYmd)}.`);
+          }
+          return pages;
+        } catch (error) {
+          for (const dateYmd of dates) dateFailures.push({ dateYmd, message: error.message });
+          log(`Browser-backed showtime scan failed for ${dates.length} date(s): ${error.message}`);
+          return [];
+        }
+      };
+
+      if (CONFIG.abortDateScanOnFirstFailure && targetDates.length) {
+        const [firstDate, ...remainingDates] = targetDates;
+        const firstPages = await scanBrowserDatePages([firstDate]);
+        if (!firstPages.length) {
+          abortedDateScan = true;
+          log(`Aborting remaining ${remainingDates.length} date scan(s) after first-date browser failure.`);
+        } else {
+          datePages.push(...firstPages);
+          datePages.push(...await scanBrowserDatePages(remainingDates));
+        }
+      } else {
+        datePages = await scanBrowserDatePages(targetDates);
+      }
+    } else if (CONFIG.abortDateScanOnFirstFailure && targetDates.length) {
       const [firstDate, ...remainingDates] = targetDates;
       const firstPage = await scanDatePage(firstDate);
       if (!firstPage) {
@@ -1080,6 +1232,11 @@ async function runCycle() {
 function normalizeAutoSeatCheckMode(value) {
   const normalized = String(value || '').trim().toLowerCase();
   return ['all', 'release', 'none'].includes(normalized) ? normalized : 'release';
+}
+
+function normalizeShowtimeFetchMode(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return ['http', 'browser'].includes(normalized) ? normalized : 'http';
 }
 
 function getCheckDateInput() {
