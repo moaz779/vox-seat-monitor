@@ -48,7 +48,9 @@ jobs:
           VOX_MOVIE: the-odyssey
           VOX_EXPERIENCE: IMAX
           VOX_EXPERIENCES: IMAX,Standard
-          VOX_STANDARD_PRIORITY_SEATS: B:8,7,6,5,4,3,2,1;C:8,7,6,5,4,3,2,1;D:8,7,6,5,4,3,2,1
+          VOX_TARGET_SEATS_IMAX: "E,F,G,H,J,K,L:18-7"
+          VOX_TARGET_SEATS_STANDARD: "B,C,D:8-1"
+          VOX_LEGACY_INTERESTED_ALERTS: "0"
           VOX_STATE_FILE: github-state/state.json
           VOX_LOOKAHEAD_DAYS: "21"
           VOX_PARALLEL_DATE_SCANS: "4"

@@ -135,7 +135,7 @@ When the scheduled monitor is running, message your bot:
 /status
 ```
 
-`/check`, `/date`, and `/seats` scan just that requested date immediately. The bot first sends the listed showtimes and booking links, then checks live seat maps. If any seats are available in your interested range, it sends that seat message immediately while the requested-date scan is still running.
+`/check`, `/date`, and `/seats` scan just that requested date immediately. The bot first sends the listed showtimes and booking links, then checks live seat maps. If any seats are available in the target seats for that showtime's experience, it sends that seat message immediately while the requested-date scan is still running.
 
 Showtime/day discovery is intentionally fast: the script checks the live showtime HTML with no-cache headers and scans dates in parallel.
 
@@ -189,36 +189,23 @@ Seat types are inferred from VOX's seat CSS classes. The script reports `Premium
 
 ## Seat Rules
 
-Normal Telegram seat updates only apply to IMAX and only include:
-
-```text
-Rows E/F/G/H/J/K/L, seat numbers 18 through 7
-```
-
-The priority standalone Telegram alert triggers for:
+Target seats are experience-specific because IMAX and Standard use different seat maps:
 
 ```text
 IMAX:
-H-16 H-15 H-14 H-13 H-12
-J-16 J-15 J-14 J-13 J-12
-K-16 K-15 K-14 K-13 K-12
+Rows E/F/G/H/J/K/L, seats 18 through 7
 
 Standard:
-B-8 B-7 B-6 B-5 B-4 B-3 B-2 B-1
-C-8 C-7 C-6 C-5 C-4 C-3 C-2 C-1
-D-8 D-7 D-6 D-5 D-4 D-3 D-2 D-1
+Rows B/C/D, seats 8 through 1
 ```
 
 Override those in `.env` with:
 
 ```text
 VOX_EXPERIENCES=IMAX,Standard
-VOX_INTERESTED_ROWS=E,F,G,H,J,K,L
-VOX_INTERESTED_MIN_SEAT=7
-VOX_INTERESTED_MAX_SEAT=18
-VOX_PRIORITY_SEATS=H:16,15,14,13,12;J:16,15,14,13,12;K:16,15,14,13,12
-VOX_STANDARD_PRIORITY_SEATS=B:8,7,6,5,4,3,2,1;C:8,7,6,5,4,3,2,1;D:8,7,6,5,4,3,2,1
+VOX_TARGET_SEATS_IMAX=E,F,G,H,J,K,L:18-7
+VOX_TARGET_SEATS_STANDARD=B,C,D:8-1
+VOX_LEGACY_INTERESTED_ALERTS=0
 ```
 
-Sold-out and zero-interest-seat results are kept quiet in Telegram.
-Standard showtimes do not use the IMAX interested range; they only send target-seat alerts for B/C/D seats 8 through 1.
+Sold-out and zero-target-seat results are kept quiet in Telegram.

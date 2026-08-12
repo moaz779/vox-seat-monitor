@@ -37,8 +37,11 @@ const CONFIG = {
   interestedRows: parseSeatRows(env('VOX_INTERESTED_ROWS', 'E,F,G,H,J,K,L')),
   interestedMinSeat: numberEnv('VOX_INTERESTED_MIN_SEAT', 7),
   interestedMaxSeat: numberEnv('VOX_INTERESTED_MAX_SEAT', 18),
-  prioritySeatKeys: parsePrioritySeats(env('VOX_PRIORITY_SEATS', 'H:16,15,14,13,12;J:16,15,14,13,12;K:16,15,14,13,12')),
-  standardPrioritySeatKeys: parsePrioritySeats(env('VOX_STANDARD_PRIORITY_SEATS', 'B:8,7,6,5,4,3,2,1;C:8,7,6,5,4,3,2,1;D:8,7,6,5,4,3,2,1')),
+  targetSeatKeysByExperience: parseTargetSeatKeysByExperience({
+    IMAX: env('VOX_TARGET_SEATS_IMAX', env('VOX_IMAX_TARGET_SEATS', env('VOX_PRIORITY_SEATS', 'E,F,G,H,J,K,L:18-7'))),
+    STANDARD: env('VOX_TARGET_SEATS_STANDARD', env('VOX_STANDARD_TARGET_SEATS', env('VOX_STANDARD_PRIORITY_SEATS', 'B,C,D:8-1'))),
+  }),
+  legacyInterestedAlerts: boolEnv('VOX_LEGACY_INTERESTED_ALERTS', false),
   chromePath: env('VOX_CHROME_PATH', findBrowserPath()),
   telegramToken: env('TELEGRAM_BOT_TOKEN', ''),
   telegramChatId: env('TELEGRAM_CHAT_ID', ''),
@@ -229,18 +232,50 @@ function parseExperiences(value) {
   return experiences.length ? [...new Set(experiences)] : ['IMAX'];
 }
 
-function parsePrioritySeats(value) {
+function parseTargetSeatKeysByExperience(targets) {
+  const byExperience = {};
+  for (const [experience, seatSpec] of Object.entries(targets || {})) {
+    byExperience[normalizeExperienceKey(experience)] = parseSeatSpec(seatSpec);
+  }
+  return byExperience;
+}
+
+function parseSeatSpec(value) {
   const seats = new Set();
   for (const group of String(value || '').split(';')) {
     const [rowPart, numbersPart] = group.split(':');
-    const row = String(rowPart || '').trim().toUpperCase();
-    if (!row || !numbersPart) continue;
-    for (const number of numbersPart.split(/[,\s/]+/)) {
-      const parsed = Number(number);
-      if (Number.isFinite(parsed)) seats.add(`${row}-${parsed}`);
+    const rows = String(rowPart || '')
+      .split(/[,\s/]+/)
+      .map((row) => row.trim().toUpperCase())
+      .filter(Boolean);
+    if (!rows.length || !numbersPart) continue;
+    for (const parsed of parseSeatNumberSpec(numbersPart)) {
+      for (const row of rows) seats.add(`${row}-${parsed}`);
     }
   }
   return seats;
+}
+
+function parseSeatNumberSpec(value) {
+  const numbers = [];
+  for (const token of String(value || '').split(/[,\s/]+/)) {
+    const trimmed = token.trim();
+    if (!trimmed) continue;
+    const rangeMatch = trimmed.match(/^(\d+)\s*-\s*(\d+)$/);
+    if (rangeMatch) {
+      const start = Number(rangeMatch[1]);
+      const end = Number(rangeMatch[2]);
+      const step = start <= end ? 1 : -1;
+      for (let current = start; step > 0 ? current <= end : current >= end; current += step) {
+        numbers.push(current);
+      }
+      continue;
+    }
+
+    const parsed = Number(trimmed);
+    if (Number.isFinite(parsed)) numbers.push(parsed);
+  }
+  return numbers;
 }
 
 function findBrowserPath() {
@@ -1208,9 +1243,9 @@ async function runCycle() {
           const seatInfo = enrichSeatInfo(await inspectSeats(browser, showtime));
           checked.push(seatInfo);
           if (seatInfo.seatCount === 0 && seatInfo.soldOut) {
-            log(`Seat result for ${displayDate(showtime.date)} ${showtime.experience} ${showtime.time}: unavailable/sold out, 0 in interested range.`);
+            log(`Seat result for ${displayDate(showtime.date)} ${showtime.experience} ${showtime.time}: unavailable/sold out, 0 target seats.`);
           } else {
-            log(`Seat result for ${displayDate(showtime.date)} ${showtime.experience} ${showtime.time}: ${seatInfo.available}/${seatInfo.seatCount} available, ${seatInfo.interestedAvailable} in interested range, ${seatInfo.priorityAvailable} target.`);
+            log(`Seat result for ${displayDate(showtime.date)} ${showtime.experience} ${showtime.time}: ${seatInfo.available}/${seatInfo.seatCount} available, ${seatInfo.targetAvailable} target.`);
           }
 
           const snapshotKey = showtime.key;
@@ -1220,10 +1255,12 @@ async function runCycle() {
           });
 
           let interestedAlertType = '';
-          if (seatInfo.interestedAvailable > 0 && previousSnapshot && CONFIG.notifySeatChanges && previousSnapshot.signature !== signature) {
-            interestedAlertType = 'INTERESTED SEATS CHANGED';
-          } else if (seatInfo.interestedAvailable > 0 && !previousSnapshot) {
-            interestedAlertType = 'INTERESTED SEATS AVAILABLE';
+          if (CONFIG.legacyInterestedAlerts) {
+            if (seatInfo.interestedAvailable > 0 && previousSnapshot && CONFIG.notifySeatChanges && previousSnapshot.signature !== signature) {
+              interestedAlertType = 'LEGACY WATCH-RANGE SEATS CHANGED';
+            } else if (seatInfo.interestedAvailable > 0 && !previousSnapshot) {
+              interestedAlertType = 'LEGACY WATCH-RANGE SEATS AVAILABLE';
+            }
           }
 
           if (interestedAlertType) {
@@ -1231,23 +1268,25 @@ async function runCycle() {
             if (canSendTelegram()) {
               await sendTelegram(interestedMessage);
               state.hasSentBaseline = true;
-              log(`Sent interested-seat alert for ${displayDate(seatInfo.date)} ${seatInfo.experience} ${seatInfo.time}: ${formatSeatList(seatInfo.interestedAvailableSeats, 28)}.`);
+              log(`Sent legacy watch-range alert for ${displayDate(seatInfo.date)} ${seatInfo.experience} ${seatInfo.time}: ${formatSeatList(seatInfo.interestedAvailableSeats, 28)}.`);
             } else {
               alerts.push(interestedMessage.replace(/\n/g, ' | '));
             }
           }
 
-          state.seatSnapshots[snapshotKey] = { signature, updatedAt: startedAt, seatInfo };
-          saveState(state);
+          if (CONFIG.legacyInterestedAlerts) {
+            state.seatSnapshots[snapshotKey] = { signature, updatedAt: startedAt, seatInfo };
+            saveState(state);
+          }
 
-          const prioritySignature = JSON.stringify(seatInfo.priorityAvailableSeats);
+          const prioritySignature = JSON.stringify(seatInfo.targetAvailableSeats);
           const previousPrioritySnapshot = state.prioritySnapshots[snapshotKey];
-          if (seatInfo.priorityAvailable > 0 && (!previousPrioritySnapshot || previousPrioritySnapshot.signature !== prioritySignature)) {
+          if (seatInfo.targetAvailable > 0 && (!previousPrioritySnapshot || previousPrioritySnapshot.signature !== prioritySignature)) {
             const priorityMessage = formatPrioritySeatMessage(seatInfo);
             if (canSendTelegram()) {
               await sendTelegram(priorityMessage);
               state.hasSentBaseline = true;
-              log(`Sent priority-seat alert for ${displayDate(seatInfo.date)} ${seatInfo.experience} ${seatInfo.time}: ${formatSeatList(seatInfo.priorityAvailableSeats, 20)}.`);
+              log(`Sent target-seat alert for ${displayDate(seatInfo.date)} ${seatInfo.experience} ${seatInfo.time}: ${formatSeatList(seatInfo.targetAvailableSeats, 20)}.`);
             } else {
               alerts.push(priorityMessage.replace(/\n/g, ' | '));
             }
@@ -1255,7 +1294,7 @@ async function runCycle() {
           state.prioritySnapshots[snapshotKey] = {
             signature: prioritySignature,
             updatedAt: startedAt,
-            priorityAvailableSeats: seatInfo.priorityAvailableSeats,
+            priorityAvailableSeats: seatInfo.targetAvailableSeats,
           };
         } catch (error) {
           alerts.push(`Could not read seats for ${displayDate(showtime.date)} ${showtime.time}: ${error.message}`);
@@ -1291,7 +1330,7 @@ async function runCycle() {
       await sendTelegram(summary);
       log('Sent summary to Telegram.');
     } else {
-      log('No Telegram summary sent; no new alerts or interested-seat changes.');
+      log('No Telegram summary sent; no new alerts or target-seat changes.');
     }
     state.hasSentBaseline = true;
     saveState(state);
@@ -1585,7 +1624,7 @@ async function runRequestedDateCheck(dateYmd) {
   const failures = [];
   let browser = null;
 
-  await sendTelegramOrLog(`Checking ${displayDate(dateYmd)} now for ${CONFIG.movie} ${formatExperienceLabel()}.\nI will send matching interested/target seats immediately as each seat map is read.`);
+  await sendTelegramOrLog(`Checking ${displayDate(dateYmd)} now for ${CONFIG.movie} ${formatExperienceLabel()}.\nI will send matching target seats immediately as each seat map is read.`);
   log(`Telegram command requested date check for ${displayDate(dateYmd)}.`);
 
   try {
@@ -1612,14 +1651,14 @@ async function runRequestedDateCheck(dateYmd) {
         const seatInfo = enrichSeatInfo(await inspectSeats(browser, showtime));
         checked.push(seatInfo);
 
-        if (seatInfo.interestedAvailable > 0) {
-          await sendTelegramOrLog(formatInterestedSeatMessage(seatInfo, 'REQUESTED DATE SEATS AVAILABLE'));
-          log(`Sent requested-date interested seats for ${displayDate(seatInfo.date)} ${seatInfo.experience} ${seatInfo.time}: ${formatSeatList(seatInfo.interestedAvailableSeats, 28)}.`);
+        if (CONFIG.legacyInterestedAlerts && seatInfo.interestedAvailable > 0) {
+          await sendTelegramOrLog(formatInterestedSeatMessage(seatInfo, 'LEGACY WATCH-RANGE SEATS AVAILABLE'));
+          log(`Sent requested-date legacy watch-range seats for ${displayDate(seatInfo.date)} ${seatInfo.experience} ${seatInfo.time}: ${formatSeatList(seatInfo.interestedAvailableSeats, 28)}.`);
         }
 
-        if (seatInfo.priorityAvailable > 0) {
+        if (seatInfo.targetAvailable > 0) {
           await sendTelegramOrLog(formatPrioritySeatMessage(seatInfo));
-          log(`Sent requested-date target seats for ${displayDate(seatInfo.date)} ${seatInfo.experience} ${seatInfo.time}: ${formatSeatList(seatInfo.priorityAvailableSeats, 20)}.`);
+          log(`Sent requested-date target seats for ${displayDate(seatInfo.date)} ${seatInfo.experience} ${seatInfo.time}: ${formatSeatList(seatInfo.targetAvailableSeats, 20)}.`);
         }
       } catch (error) {
         failures.push({ showtime, error });
@@ -1685,34 +1724,36 @@ function isSeatInInterestedRange(seat, experience) {
   return CONFIG.interestedRows.includes(normalized.row) && normalized.number >= lower && normalized.number <= upper;
 }
 
-function isPrioritySeatForExperience(seat, experience) {
+function isTargetSeatForExperience(seat, experience) {
   const normalized = normalizeSeat(seat);
   const key = `${normalized.row}-${normalized.number}`;
-  if (normalizeExperienceKey(experience) === 'STANDARD') return CONFIG.standardPrioritySeatKeys.has(key);
-  return CONFIG.prioritySeatKeys.has(key);
+  const targetSeatKeys = CONFIG.targetSeatKeysByExperience[normalizeExperienceKey(experience)];
+  return !!targetSeatKeys && targetSeatKeys.has(key);
 }
 
 function enrichSeatInfo(seatInfo) {
   const availableSeats = (seatInfo.availableSeats || []).map(normalizeSeat);
   const interestedAvailableSeats = availableSeats.filter((seat) => isSeatInInterestedRange(seat, seatInfo.experience));
-  const priorityAvailableSeats = availableSeats.filter((seat) => isPrioritySeatForExperience(seat, seatInfo.experience));
+  const targetAvailableSeats = availableSeats.filter((seat) => isTargetSeatForExperience(seat, seatInfo.experience));
 
   return {
     ...seatInfo,
     availableSeats,
     interestedAvailable: interestedAvailableSeats.length,
     interestedAvailableSeats,
-    priorityAvailable: priorityAvailableSeats.length,
-    priorityAvailableSeats,
+    priorityAvailable: targetAvailableSeats.length,
+    priorityAvailableSeats: targetAvailableSeats,
+    targetAvailable: targetAvailableSeats.length,
+    targetAvailableSeats,
   };
 }
 
-function formatInterestedRange() {
+function formatLegacyInterestedRange() {
   return `IMAX rows ${CONFIG.interestedRows.join('/')} seats ${CONFIG.interestedMaxSeat}..${CONFIG.interestedMinSeat}`;
 }
 
-function formatPriorityRanges() {
-  return 'IMAX H/J/K seats 16..12; Standard B/C/D seats 8..1';
+function formatTargetRanges() {
+  return 'IMAX rows E/F/G/H/J/K/L seats 18..7; Standard rows B/C/D seats 8..1';
 }
 
 function formatSeatList(availableSeats, max = 28) {
@@ -1748,8 +1789,7 @@ function formatCommandStatus() {
     `Mode: ${CONFIG.commandOnly ? 'command-only; no automatic VOX scans' : 'automatic scan loop'}`,
     `Last normal run: ${state.lastRunAt || 'not recorded yet'}`,
     `Date window: ${displayDate(dates[0])} to ${displayDate(dates[dates.length - 1])}`,
-    `Interested: ${formatInterestedRange()}`,
-    `Targets: ${formatPriorityRanges()}`,
+    `Targets: ${formatTargetRanges()}`,
     `Poll: every ${CONFIG.pollMinutes} minute(s)`,
     `Commands: ${CONFIG.telegramCommands ? 'enabled' : 'disabled'}`,
   ].join('\n');
@@ -1779,8 +1819,8 @@ function formatRequestedDateShowtimesMessage(dateYmd, showtimes) {
 
 function formatRequestedDateResultMessage(dateYmd, showtimes, checked, failures, startedMs) {
   const lines = [];
-  const interestingShowtimes = checked.filter((showtime) => showtime.interestedAvailable > 0);
-  const targetShowtimes = checked.filter((showtime) => showtime.priorityAvailable > 0);
+  const interestingShowtimes = CONFIG.legacyInterestedAlerts ? checked.filter((showtime) => showtime.interestedAvailable > 0) : [];
+  const targetShowtimes = checked.filter((showtime) => showtime.targetAvailable > 0);
   const checkedByKey = new Map(checked.map((seatInfo) => [seatInfo.key, seatInfo]));
 
   lines.push('REQUESTED DATE CHECK DONE');
@@ -1791,23 +1831,23 @@ function formatRequestedDateResultMessage(dateYmd, showtimes, checked, failures,
     lines.push('');
     lines.push('Target seats found:');
     for (const seatInfo of targetShowtimes.sort(compareShowtimes)) {
-      lines.push(`- ${seatInfo.experience} ${seatInfo.time}: ${seatInfo.priorityAvailable} target seat(s)`);
-      lines.push(`  Seats: ${formatSeatList(seatInfo.priorityAvailableSeats, 20)}`);
+      lines.push(`- ${seatInfo.experience} ${seatInfo.time}: ${seatInfo.targetAvailable} target seat(s)`);
+      lines.push(`  Seats: ${formatSeatList(seatInfo.targetAvailableSeats, 20)}`);
       lines.push(`  Booking: ${bookingUrl(seatInfo)}`);
     }
   }
 
   if (interestingShowtimes.length) {
     lines.push('');
-    lines.push('Interested seats found:');
+    lines.push('Legacy watch-range seats found:');
     for (const seatInfo of interestingShowtimes.sort(compareShowtimes)) {
-      lines.push(`- ${seatInfo.experience} ${seatInfo.time}: ${seatInfo.interestedAvailable} interested seat(s)`);
+      lines.push(`- ${seatInfo.experience} ${seatInfo.time}: ${seatInfo.interestedAvailable} legacy watch-range seat(s)`);
       lines.push(`  Seats: ${formatSeatList(seatInfo.interestedAvailableSeats, 28)}`);
       lines.push(`  Booking: ${bookingUrl(seatInfo)}`);
     }
   } else if (!targetShowtimes.length) {
     lines.push('');
-    lines.push(`No seats found in ${formatInterestedRange()} or target ranges (${formatPriorityRanges()}).`);
+    lines.push(`No target seats found (${formatTargetRanges()}).`);
   }
 
   lines.push('');
@@ -1831,7 +1871,7 @@ function formatRequestedDateResultMessage(dateYmd, showtimes, checked, failures,
 
 function formatSeatCheckStatus(seatInfo) {
   if (seatInfo.seatCount === 0 && seatInfo.soldOut) return 'unavailable/sold out';
-  return `${seatInfo.available}/${seatInfo.seatCount} available, ${seatInfo.interestedAvailable} interested, ${seatInfo.priorityAvailable} target`;
+  return `${seatInfo.available}/${seatInfo.seatCount} available, ${seatInfo.targetAvailable} target`;
 }
 
 function formatNewDateMessage(date, dayShowtimes) {
@@ -1847,12 +1887,12 @@ function formatNewDateMessage(date, dayShowtimes) {
   return lines.join('\n');
 }
 
-function formatInterestedSeatMessage(seatInfo, title = 'INTERESTED SEATS AVAILABLE') {
+function formatInterestedSeatMessage(seatInfo, title = 'LEGACY WATCH-RANGE SEATS AVAILABLE') {
   const lines = [];
   lines.push(title);
   lines.push(`${displayDate(seatInfo.date)} ${seatInfo.time}`);
   lines.push(`${seatInfo.experience || formatExperienceLabel()}${seatInfo.screen ? ` - ${seatInfo.screen}` : ''}`);
-  lines.push(`Range: ${formatInterestedRange()}`);
+  lines.push(`Range: ${formatLegacyInterestedRange()}`);
   lines.push(`Seats: ${formatSeatList(seatInfo.interestedAvailableSeats, 28)}`);
   lines.push(`Booking: ${bookingUrl(seatInfo)}`);
   return lines.join('\n');
@@ -1863,7 +1903,7 @@ function formatPrioritySeatMessage(seatInfo) {
   lines.push('TARGET SEATS AVAILABLE');
   lines.push(`${displayDate(seatInfo.date)} ${seatInfo.time}`);
   lines.push(`${seatInfo.experience || formatExperienceLabel()}${seatInfo.screen ? ` - ${seatInfo.screen}` : ''}`);
-  lines.push(`Seats: ${formatSeatList(seatInfo.priorityAvailableSeats, 20)}`);
+  lines.push(`Seats: ${formatSeatList(seatInfo.targetAvailableSeats, 20)}`);
   lines.push(`Booking: ${bookingUrl(seatInfo)}`);
   return lines.join('\n');
 }
@@ -1884,13 +1924,13 @@ function formatSummary(startedAt, targetDates, checked, discovered, alerts) {
   }
 
   if (checked.length) {
-    const interestingShowtimes = checked.filter((showtime) => (showtime.interestedAvailableSeats || []).length > 0);
-    if (interestingShowtimes.length) {
+    const targetShowtimes = checked.filter((showtime) => (showtime.targetAvailableSeats || []).length > 0);
+    if (targetShowtimes.length) {
       lines.push('');
-      lines.push(`Seat maps (${formatInterestedRange()}):`);
-      for (const showtime of interestingShowtimes) {
-        lines.push(`- ${displayDate(showtime.date)} ${showtime.experience} ${showtime.time}: ${showtime.interestedAvailable} interested seat(s) available`);
-        lines.push(`  Seats: ${formatSeatList(showtime.interestedAvailableSeats)}`);
+      lines.push(`Target seats (${formatTargetRanges()}):`);
+      for (const showtime of targetShowtimes) {
+        lines.push(`- ${displayDate(showtime.date)} ${showtime.experience} ${showtime.time}: ${showtime.targetAvailable} target seat(s) available`);
+        lines.push(`  Seats: ${formatSeatList(showtime.targetAvailableSeats)}`);
         lines.push(`  Booking: ${bookingUrl(showtime)}`);
       }
     }
