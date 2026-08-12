@@ -33,6 +33,7 @@ const CONFIG = {
   stateFile: env('VOX_STATE_FILE', path.join(__dirname, 'state.json')),
   telegramOffsetFile: env('VOX_TELEGRAM_OFFSET_FILE', path.join(__dirname, 'telegram-offset.json')),
   networkMeasurementFile: env('VOX_NETWORK_MEASUREMENT_FILE', path.join(__dirname, 'network-measurements.jsonl')),
+  networkLogEverySeconds: numberEnv('VOX_NETWORK_LOG_EVERY_SECONDS', 60),
   interestedRows: parseSeatRows(env('VOX_INTERESTED_ROWS', 'E,F,G,H,J,K,L')),
   interestedMinSeat: numberEnv('VOX_INTERESTED_MIN_SEAT', 7),
   interestedMaxSeat: numberEnv('VOX_INTERESTED_MAX_SEAT', 18),
@@ -66,6 +67,7 @@ const NO_SEATS = process.argv.includes('--no-seats');
 const CHECK_DATE_INPUT = getCheckDateInput();
 const CHECK_DATE = CHECK_DATE_INPUT ? parseCommandDate(CHECK_DATE_INPUT) : '';
 const NETWORK_MEASURE = createNetworkMeasure();
+let networkMeasureFlushTimer = null;
 
 function loadDotEnv(filePath) {
   if (!fs.existsSync(filePath)) return;
@@ -189,6 +191,27 @@ function saveNetworkMeasure(extra = {}) {
     labels: NETWORK_MEASURE.labels,
   };
   fs.appendFileSync(CONFIG.networkMeasurementFile, `${JSON.stringify(record)}\n`);
+}
+
+function startNetworkMeasureFlushLoop(context) {
+  if (!NETWORK_MEASURE.enabled || networkMeasureFlushTimer) return;
+  resetNetworkMeasure(context);
+  const intervalMs = Math.max(10, CONFIG.networkLogEverySeconds) * 1000;
+
+  networkMeasureFlushTimer = setInterval(() => {
+    try {
+      if (NETWORK_MEASURE.requestCount === 0) return;
+      const elapsedSeconds = Number(((Date.now() - Date.parse(NETWORK_MEASURE.startedAt)) / 1000).toFixed(1));
+      saveNetworkMeasure({ type: 'periodic', elapsedSeconds });
+      log(formatNetworkMeasureSummary().replace(/\n/g, '\n  '));
+      log(`Saved network measurement to ${CONFIG.networkMeasurementFile}`);
+      resetNetworkMeasure(context);
+    } catch (error) {
+      log(`Could not save network measurement: ${error.message}`);
+    }
+  }, intervalMs);
+
+  if (typeof networkMeasureFlushTimer.unref === 'function') networkMeasureFlushTimer.unref();
 }
 
 function parseSeatRows(value) {
@@ -1401,6 +1424,8 @@ function normalizeFailureMessage(message) {
 async function startTelegramCommandLoop() {
   if (!CONFIG.telegramCommands || !canSendTelegram() || ONCE) return;
 
+  startNetworkMeasureFlushLoop('telegram-command-loop');
+
   try {
     await initializeTelegramCommandOffset();
     log('Telegram commands enabled. Use /check 13/8 or /check 2026-08-13.');
@@ -1461,7 +1486,9 @@ async function getTelegramUpdates(offset, timeoutSeconds) {
 
   try {
     const response = await fetch(endpoint, { signal: controller.signal });
-    const data = await response.json();
+    const text = await response.text();
+    recordNetworkBytes('telegram', 'getUpdates-response', Buffer.byteLength(text, 'utf8'), 'telegram-api');
+    const data = JSON.parse(text);
     if (!response.ok || !data.ok) throw new Error(`Telegram getUpdates failed: HTTP ${response.status}`);
     return Array.isArray(data.result) ? data.result : [];
   } catch (error) {
@@ -1886,18 +1913,21 @@ async function sendTelegram(text) {
   const chunks = splitTelegramMessage(text);
 
   for (const chunk of chunks) {
+    const body = JSON.stringify({
+      chat_id: CONFIG.telegramChatId,
+      text: chunk,
+      disable_web_page_preview: true,
+    });
+    recordNetworkBytes('telegram', 'sendMessage-request', Buffer.byteLength(body, 'utf8'), 'telegram-api');
     const response = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: CONFIG.telegramChatId,
-        text: chunk,
-        disable_web_page_preview: true,
-      }),
+      body,
     });
+    const responseBody = await response.text();
+    recordNetworkBytes('telegram', 'sendMessage-response', Buffer.byteLength(responseBody, 'utf8'), 'telegram-api');
     if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`Telegram send failed: HTTP ${response.status} ${body}`);
+      throw new Error(`Telegram send failed: HTTP ${response.status} ${responseBody}`);
     }
   }
 }
