@@ -127,15 +127,18 @@ When the scheduled monitor is running, message your bot:
 
 ```text
 /check 13/8
+/check 13/8 imax
+/check 13/8 standard
+/check 13/8 standard 2
 /check 2026-08-13
 /date 13/8
 /seats 13/8
-/today
-/tomorrow
+/today imax 2
+/tomorrow standard
 /status
 ```
 
-`/check`, `/date`, and `/seats` scan just that requested date immediately. The bot first sends the listed showtimes and booking links, then checks live seat maps. If any seats are available in the target seats for that showtime's experience, it sends that seat message immediately while the requested-date scan is still running.
+`/check`, `/date`, and `/seats` scan just that requested date immediately. Add `imax` or `standard` to check only one experience; omit it to check both. Add `2`, `pair`, `seats=2`, or `adjacent=2` when you need two target seats beside each other. If matching target seats are found, the bot sends that message immediately while the requested-date scan is still running.
 
 Showtime/day discovery is intentionally fast: the script checks the live showtime HTML with no-cache headers and scans dates in parallel.
 
@@ -198,6 +201,8 @@ Rows E/F/G/H/J/K/L, seats 18 through 7
 Standard:
 Rows B/C/D, seats 8 through 1
 ```
+
+When you add `2` or `seats=2` to a command, the bot only treats same-row consecutive target seats as a match.
 
 Override those in `.env` with:
 

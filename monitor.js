@@ -9,6 +9,11 @@ const path = require('path');
 
 loadDotEnv(path.join(__dirname, '.env'));
 
+const TARGET_SEAT_SPECS = {
+  IMAX: env('VOX_TARGET_SEATS_IMAX', env('VOX_IMAX_TARGET_SEATS', env('VOX_PRIORITY_SEATS', 'E,F,G,H,J,K,L:18-7'))),
+  STANDARD: env('VOX_TARGET_SEATS_STANDARD', env('VOX_STANDARD_TARGET_SEATS', env('VOX_STANDARD_PRIORITY_SEATS', 'B,C,D:8-1'))),
+};
+
 const CONFIG = {
   baseUrl: env('VOX_BASE_URL', 'https://egy.voxcinemas.com'),
   city: env('VOX_CITY', 'city-centre-almaza'),
@@ -37,10 +42,8 @@ const CONFIG = {
   interestedRows: parseSeatRows(env('VOX_INTERESTED_ROWS', 'E,F,G,H,J,K,L')),
   interestedMinSeat: numberEnv('VOX_INTERESTED_MIN_SEAT', 7),
   interestedMaxSeat: numberEnv('VOX_INTERESTED_MAX_SEAT', 18),
-  targetSeatKeysByExperience: parseTargetSeatKeysByExperience({
-    IMAX: env('VOX_TARGET_SEATS_IMAX', env('VOX_IMAX_TARGET_SEATS', env('VOX_PRIORITY_SEATS', 'E,F,G,H,J,K,L:18-7'))),
-    STANDARD: env('VOX_TARGET_SEATS_STANDARD', env('VOX_STANDARD_TARGET_SEATS', env('VOX_STANDARD_PRIORITY_SEATS', 'B,C,D:8-1'))),
-  }),
+  targetSeatSpecsByExperience: TARGET_SEAT_SPECS,
+  targetSeatKeysByExperience: parseTargetSeatKeysByExperience(TARGET_SEAT_SPECS),
   legacyInterestedAlerts: boolEnv('VOX_LEGACY_INTERESTED_ALERTS', false),
   chromePath: env('VOX_CHROME_PATH', findBrowserPath()),
   telegramToken: env('TELEGRAM_BOT_TOKEN', ''),
@@ -1362,6 +1365,17 @@ function formatExperienceLabel() {
   return CONFIG.experiences.join('/');
 }
 
+function formatRequestExperienceLabel(options = {}) {
+  const experiences = (options.experiences || CONFIG.experiences.map(normalizeExperienceKey))
+    .map(displayExperienceKey);
+  return experiences.join('/');
+}
+
+function displayExperienceKey(key) {
+  const normalizedKey = normalizeExperienceKey(key);
+  return CONFIG.experiences.find((experience) => normalizeExperienceKey(experience) === normalizedKey) || normalizedKey;
+}
+
 function getCheckDateInput() {
   return getArgValue('--check-date') || env('VOX_CHECK_DATE', '');
 }
@@ -1562,18 +1576,23 @@ async function handleTelegramUpdate(update) {
   }
 
   if (['/check', '/date', '/seats'].includes(parsed.command)) {
-    const dateYmd = parseCommandDate(parsed.args);
-    if (!dateYmd) {
-      await sendTelegram(`I need a date.\n\n${telegramCommandHelp()}`);
+    const request = parseRequestedDateCommand(parsed.args);
+    if (request.error) {
+      await sendTelegram(`${request.error}\n\n${telegramCommandHelp()}`);
       return;
     }
-    await runRequestedDateCheck(dateYmd);
+    await runRequestedDateCheck(request.dateYmd, request.options);
     return;
   }
 
   if (parsed.command === '/today' || parsed.command === '/tomorrow') {
     const offsetDays = parsed.command === '/today' ? 0 : 1;
-    await runRequestedDateCheck(formatDateYmd(addDays(scanStartDate(), offsetDays)));
+    const request = parseRequestedDateCommand(parsed.args, formatDateYmd(addDays(scanStartDate(), offsetDays)));
+    if (request.error) {
+      await sendTelegram(`${request.error}\n\n${telegramCommandHelp()}`);
+      return;
+    }
+    await runRequestedDateCheck(request.dateYmd, request.options);
     return;
   }
 
@@ -1586,6 +1605,158 @@ function parseTelegramCommand(text) {
   const [rawCommand, ...rest] = trimmed.split(/\s+/);
   const command = rawCommand.split('@')[0].toLowerCase();
   return { command, args: rest.join(' ').trim() };
+}
+
+function parseRequestedDateCommand(args, defaultDateYmd = '') {
+  const tokens = String(args || '').split(/\s+/).map(cleanCommandToken).filter(Boolean);
+  const experienceKeys = new Set();
+  const unknown = [];
+  let dateYmd = defaultDateYmd || '';
+  let minAdjacentSeats = 1;
+
+  for (const token of tokens) {
+    const optionMatch = token.match(/^([a-z]+)[:=](.+)$/i);
+    if (optionMatch) {
+      const key = optionMatch[1].toLowerCase();
+      const value = optionMatch[2];
+      if (['exp', 'experience', 'screen', 'type', 'format'].includes(key)) {
+        const parsedExperiences = parseRequestedExperienceList(value);
+        if (!parsedExperiences.length) unknown.push(token);
+        for (const experience of parsedExperiences) experienceKeys.add(experience);
+        continue;
+      }
+      if (['seat', 'seats', 'adjacent', 'together', 'group', 'qty', 'count'].includes(key)) {
+        const parsedSeatCount = parseRequestedSeatCount(value);
+        if (!parsedSeatCount) unknown.push(token);
+        else minAdjacentSeats = parsedSeatCount;
+        continue;
+      }
+    }
+
+    const dateCandidate = parseCommandDate(token);
+    if (dateCandidate && !dateYmd) {
+      dateYmd = dateCandidate;
+      continue;
+    }
+    if (dateCandidate) continue;
+
+    if (isAllExperiencesToken(token)) {
+      for (const experience of CONFIG.experiences.map(normalizeExperienceKey)) experienceKeys.add(experience);
+      continue;
+    }
+
+    const requestedExperience = parseRequestedExperience(token);
+    if (requestedExperience) {
+      experienceKeys.add(requestedExperience);
+      continue;
+    }
+
+    const requestedSeatCount = parseRequestedSeatCount(token);
+    if (requestedSeatCount) {
+      minAdjacentSeats = requestedSeatCount;
+      continue;
+    }
+
+    if (isIgnoredCommandOptionWord(token)) continue;
+    unknown.push(token);
+  }
+
+  if (!dateYmd) return { error: 'I need a date.' };
+  if (unknown.length) return { error: `I did not understand: ${unknown.join(' ')}` };
+
+  const requestedExperiences = experienceKeys.size
+    ? [...experienceKeys].filter((experience) => CONFIG.experiences.map(normalizeExperienceKey).includes(experience))
+    : CONFIG.experiences.map(normalizeExperienceKey);
+
+  if (!requestedExperiences.length) {
+    return { error: `That experience is not enabled. Enabled: ${formatExperienceLabel()}.` };
+  }
+
+  return {
+    dateYmd,
+    options: {
+      experiences: requestedExperiences,
+      minAdjacentSeats,
+    },
+  };
+}
+
+function cleanCommandToken(token) {
+  return String(token || '').trim().replace(/^[,;.!?]+|[,;.!?]+$/g, '');
+}
+
+function parseRequestedExperienceList(value) {
+  const experiences = [];
+  for (const part of String(value || '').split(/[,/|+]+|\band\b/i)) {
+    if (isAllExperiencesToken(part)) {
+      experiences.push(...CONFIG.experiences.map(normalizeExperienceKey));
+      continue;
+    }
+    const experience = parseRequestedExperience(part);
+    if (experience) experiences.push(experience);
+  }
+  return experiences;
+}
+
+function parseRequestedExperience(value) {
+  const key = normalizeExperienceKey(value);
+  const aliases = {
+    I: 'IMAX',
+    IMAX: 'IMAX',
+    MAX: 'IMAX',
+    STD: 'STANDARD',
+    STANDARD: 'STANDARD',
+    STANDART: 'STANDARD',
+    STANDAT: 'STANDARD',
+    REGULAR: 'STANDARD',
+    NORMAL: 'STANDARD',
+  };
+  return aliases[key] || (CONFIG.experiences.map(normalizeExperienceKey).includes(key) ? key : '');
+}
+
+function isAllExperiencesToken(value) {
+  return ['ALL', 'BOTH', 'ANY'].includes(normalizeExperienceKey(value));
+}
+
+function parseRequestedSeatCount(value) {
+  const text = normalize(value).toLowerCase();
+  if (!text) return 0;
+  if (['pair', 'pairs', 'couple'].includes(text)) return 2;
+
+  let match = text.match(/^x?([1-9]\d*)x?$/);
+  if (!match) match = text.match(/^([1-9]\d*)\s*(?:seat|seats|tickets|people|ppl)$/);
+  if (!match) return 0;
+
+  const count = Number(match[1]);
+  return Number.isInteger(count) && count >= 1 && count <= 10 ? count : 0;
+}
+
+function isIgnoredCommandOptionWord(token) {
+  return new Set([
+    'seat',
+    'seats',
+    'ticket',
+    'tickets',
+    'person',
+    'people',
+    'ppl',
+    'friend',
+    'friends',
+    'adjacent',
+    'together',
+    'next',
+    'to',
+    'each',
+    'eachother',
+    'other',
+    'with',
+    'for',
+    'only',
+    'please',
+    'pls',
+    'nextto',
+    'nexttoeachother',
+  ]).has(normalize(token).toLowerCase().replace(/[-_]/g, ''));
 }
 
 function parseCommandDate(input) {
@@ -1618,25 +1789,26 @@ function datePartsToYmd(year, month, day) {
   return formatDateYmd(date);
 }
 
-async function runRequestedDateCheck(dateYmd) {
+async function runRequestedDateCheck(dateYmd, options = {}) {
+  const requestOptions = normalizeRequestedDateOptions(options);
   const startedMs = Date.now();
   const checked = [];
   const failures = [];
   let browser = null;
 
-  await sendTelegramOrLog(`Checking ${displayDate(dateYmd)} now for ${CONFIG.movie} ${formatExperienceLabel()}.\nI will send matching target seats immediately as each seat map is read.`);
-  log(`Telegram command requested date check for ${displayDate(dateYmd)}.`);
+  await sendTelegramOrLog(`Checking ${displayDate(dateYmd)} now for ${CONFIG.movie} ${formatRequestExperienceLabel(requestOptions)}.\nI will send matching target seats immediately as each seat map is read.${requestOptions.minAdjacentSeats > 1 ? ` Need ${requestOptions.minAdjacentSeats} seats together.` : ''}`);
+  log(`Telegram command requested date check for ${displayDate(dateYmd)} (${formatRequestExperienceLabel(requestOptions)}, adjacent ${requestOptions.minAdjacentSeats}).`);
 
   try {
     const page = await discoverShowtimes(dateYmd);
-    const showtimes = dedupeShowtimes(page.showtimes);
+    const showtimes = filterShowtimesByRequestOptions(dedupeShowtimes(page.showtimes), requestOptions);
 
     if (!showtimes.length) {
-      await sendTelegramOrLog(formatRequestedDateNoShowtimesMessage(dateYmd));
+      await sendTelegramOrLog(formatRequestedDateNoShowtimesMessage(dateYmd, requestOptions));
       return;
     }
 
-    await sendTelegramOrLog(formatRequestedDateShowtimesMessage(dateYmd, showtimes));
+    await sendTelegramOrLog(formatRequestedDateShowtimesMessage(dateYmd, showtimes, requestOptions));
 
     const seatShowtimes = NO_SEATS ? [] : showtimes.filter((showtime) => showtime.bookingId && (!CONFIG.skipUnavailableListings || showtime.listingStatus === 'bookable'));
     if (NO_SEATS) log('Skipping requested-date seat maps because --no-seats is set.');
@@ -1648,7 +1820,7 @@ async function runRequestedDateCheck(dateYmd) {
     for (const showtime of seatShowtimes) {
       try {
         log(`Command reading seats for ${displayDate(showtime.date)} ${showtime.experience} ${showtime.time} (${showtime.bookingId})...`);
-        const seatInfo = enrichSeatInfo(await inspectSeats(browser, showtime));
+        const seatInfo = enrichSeatInfo(await inspectSeats(browser, showtime), requestOptions);
         checked.push(seatInfo);
 
         if (CONFIG.legacyInterestedAlerts && seatInfo.interestedAvailable > 0) {
@@ -1666,10 +1838,27 @@ async function runRequestedDateCheck(dateYmd) {
       }
     }
 
-    await sendTelegramOrLog(formatRequestedDateResultMessage(dateYmd, showtimes, checked, failures, startedMs));
+    await sendTelegramOrLog(formatRequestedDateResultMessage(dateYmd, showtimes, checked, failures, startedMs, requestOptions));
   } finally {
     if (browser) await browser.stop();
   }
+}
+
+function normalizeRequestedDateOptions(options = {}) {
+  const enabledExperienceKeys = CONFIG.experiences.map(normalizeExperienceKey);
+  const requestedExperiences = Array.isArray(options.experiences) && options.experiences.length
+    ? options.experiences.map(normalizeExperienceKey).filter((experience) => enabledExperienceKeys.includes(experience))
+    : enabledExperienceKeys;
+  const minAdjacentSeats = Number.isInteger(options.minAdjacentSeats) && options.minAdjacentSeats > 0 ? options.minAdjacentSeats : 1;
+  return {
+    experiences: requestedExperiences.length ? [...new Set(requestedExperiences)] : enabledExperienceKeys,
+    minAdjacentSeats,
+  };
+}
+
+function filterShowtimesByRequestOptions(showtimes, options) {
+  const wanted = new Set(options.experiences.map(normalizeExperienceKey));
+  return showtimes.filter((showtime) => wanted.has(normalizeExperienceKey(showtime.experience)));
 }
 
 function dedupeShowtimes(showtimes) {
@@ -1731,10 +1920,13 @@ function isTargetSeatForExperience(seat, experience) {
   return !!targetSeatKeys && targetSeatKeys.has(key);
 }
 
-function enrichSeatInfo(seatInfo) {
+function enrichSeatInfo(seatInfo, options = {}) {
+  const minAdjacentSeats = Number.isInteger(options.minAdjacentSeats) && options.minAdjacentSeats > 0 ? options.minAdjacentSeats : 1;
   const availableSeats = (seatInfo.availableSeats || []).map(normalizeSeat);
   const interestedAvailableSeats = availableSeats.filter((seat) => isSeatInInterestedRange(seat, seatInfo.experience));
-  const targetAvailableSeats = availableSeats.filter((seat) => isTargetSeatForExperience(seat, seatInfo.experience));
+  const allTargetAvailableSeats = availableSeats.filter((seat) => isTargetSeatForExperience(seat, seatInfo.experience));
+  const targetSeatGroups = findAdjacentSeatGroups(allTargetAvailableSeats, minAdjacentSeats);
+  const targetAvailableSeats = minAdjacentSeats > 1 ? uniqueSeatsFromGroups(targetSeatGroups) : allTargetAvailableSeats;
 
   return {
     ...seatInfo,
@@ -1743,17 +1935,87 @@ function enrichSeatInfo(seatInfo) {
     interestedAvailableSeats,
     priorityAvailable: targetAvailableSeats.length,
     priorityAvailableSeats: targetAvailableSeats,
+    allTargetAvailable: allTargetAvailableSeats.length,
+    allTargetAvailableSeats,
+    minAdjacentSeats,
+    targetSeatGroups,
     targetAvailable: targetAvailableSeats.length,
     targetAvailableSeats,
   };
+}
+
+function findAdjacentSeatGroups(seats, minAdjacentSeats) {
+  if (!Number.isInteger(minAdjacentSeats) || minAdjacentSeats <= 1) return [];
+
+  const byRow = new Map();
+  for (const seat of seats.map(normalizeSeat).filter((seat) => seat.row && Number.isFinite(seat.number))) {
+    if (!byRow.has(seat.row)) byRow.set(seat.row, []);
+    byRow.get(seat.row).push(seat);
+  }
+
+  const groups = [];
+  for (const rowSeats of [...byRow.values()]) {
+    rowSeats.sort((a, b) => a.number - b.number);
+    let run = [];
+    for (const seat of rowSeats) {
+      const previous = run[run.length - 1];
+      if (!previous || seat.number === previous.number + 1) {
+        run.push(seat);
+      } else {
+        if (run.length >= minAdjacentSeats) groups.push(run);
+        run = [seat];
+      }
+    }
+    if (run.length >= minAdjacentSeats) groups.push(run);
+  }
+
+  return groups.sort((a, b) => a[0].row.localeCompare(b[0].row) || a[0].number - b[0].number);
+}
+
+function uniqueSeatsFromGroups(groups) {
+  const seen = new Set();
+  const seats = [];
+  for (const group of groups) {
+    for (const seat of group) {
+      const key = `${seat.row}-${seat.number}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      seats.push(seat);
+    }
+  }
+  return seats;
 }
 
 function formatLegacyInterestedRange() {
   return `IMAX rows ${CONFIG.interestedRows.join('/')} seats ${CONFIG.interestedMaxSeat}..${CONFIG.interestedMinSeat}`;
 }
 
-function formatTargetRanges() {
-  return 'IMAX rows E/F/G/H/J/K/L seats 18..7; Standard rows B/C/D seats 8..1';
+function formatTargetRanges(options = {}) {
+  const requestedExperiences = options.experiences || CONFIG.experiences.map(normalizeExperienceKey);
+  return requestedExperiences
+    .map(normalizeExperienceKey)
+    .filter((experience, index, experiences) => experiences.indexOf(experience) === index)
+    .map((experience) => {
+      const seatSpec = CONFIG.targetSeatSpecsByExperience[experience] || '';
+      return `${displayExperienceKey(experience)} ${formatSeatSpecForDisplay(seatSpec)}`;
+    })
+    .join('; ');
+}
+
+function formatSeatSpecForDisplay(seatSpec) {
+  const groups = [];
+  for (const group of String(seatSpec || '').split(';')) {
+    const [rowPart, numbersPart] = group.split(':');
+    const rows = String(rowPart || '').split(/[,\s/]+/).filter(Boolean).join('/');
+    const numbers = String(numbersPart || '').trim().replace(/\s*-\s*/g, '..').replace(/[,\s/]+/g, '/');
+    if (rows && numbers) groups.push(`rows ${rows} seats ${numbers}`);
+  }
+  return groups.join('; ') || 'target seats not configured';
+}
+
+function formatAdjacentRequirement(options = {}) {
+  const minAdjacentSeats = options.minAdjacentSeats || 1;
+  return minAdjacentSeats > 1 ? `, ${minAdjacentSeats} seats together` : '';
 }
 
 function formatSeatList(availableSeats, max = 28) {
@@ -1764,6 +2026,16 @@ function formatSeatList(availableSeats, max = 28) {
   return `${visible}${hidden}`;
 }
 
+function formatSeatGroups(groups, max = 8) {
+  if (!groups || groups.length === 0) return 'none';
+  const visible = groups
+    .slice(0, max)
+    .map((group) => group.map((seat) => seat.seat).join(' + '))
+    .join('; ');
+  const hidden = groups.length > max ? `; +${groups.length - max} more` : '';
+  return `${visible}${hidden}`;
+}
+
 function bookingUrl(showtime) {
   return `${CONFIG.baseUrl}/booking/${showtime.bookingId}`;
 }
@@ -1771,12 +2043,15 @@ function bookingUrl(showtime) {
 function telegramCommandHelp() {
   return [
     CONFIG.commandOnly ? 'VOX monitor commands - command-only mode' : 'VOX monitor commands',
-    '/check 13/8 - check one date now',
-    '/check 2026-08-13 - same with full date',
+    '/check 13/8 - check IMAX + Standard',
+    '/check 13/8 imax - IMAX only',
+    '/check 13/8 standard - Standard only',
+    '/check 13/8 standard 2 - Standard only, need 2 target seats together',
+    '/check 2026-08-13 imax seats=2 - full date, IMAX, pair together',
     '/date 13/8 - alias for /check',
     '/seats 13/8 - alias for /check',
-    '/today - check today',
-    '/tomorrow - check tomorrow',
+    '/today imax 2 - check today with options',
+    '/tomorrow standard - check tomorrow with options',
     '/status - monitor status',
   ].join('\n');
 }
@@ -1790,24 +2065,26 @@ function formatCommandStatus() {
     `Last normal run: ${state.lastRunAt || 'not recorded yet'}`,
     `Date window: ${displayDate(dates[0])} to ${displayDate(dates[dates.length - 1])}`,
     `Targets: ${formatTargetRanges()}`,
+    'Command options: add imax or standard; add 2/seats=2/adjacent=2 for seats together',
     `Poll: every ${CONFIG.pollMinutes} minute(s)`,
     `Commands: ${CONFIG.telegramCommands ? 'enabled' : 'disabled'}`,
   ].join('\n');
 }
 
-function formatRequestedDateNoShowtimesMessage(dateYmd) {
+function formatRequestedDateNoShowtimesMessage(dateYmd, options = {}) {
   return [
     'REQUESTED DATE CHECK',
-    `${displayDate(dateYmd)} - ${CONFIG.movie} ${formatExperienceLabel()}`,
+    `${displayDate(dateYmd)} - ${CONFIG.movie} ${formatRequestExperienceLabel(options)}`,
     'No matching showtimes found yet.',
     `Showtimes: ${showtimesUrl(dateYmd)}`,
   ].join('\n');
 }
 
-function formatRequestedDateShowtimesMessage(dateYmd, showtimes) {
+function formatRequestedDateShowtimesMessage(dateYmd, showtimes, options = {}) {
   const lines = [];
   lines.push('REQUESTED DATE SHOWTIMES');
-  lines.push(`${displayDate(dateYmd)} - ${CONFIG.movie} ${formatExperienceLabel()}`);
+  lines.push(`${displayDate(dateYmd)} - ${CONFIG.movie} ${formatRequestExperienceLabel(options)}`);
+  lines.push(`Targets: ${formatTargetRanges(options)}${formatAdjacentRequirement(options)}`);
   lines.push(`${showtimes.length} showtime(s) found. Checking seats now.`);
   for (const showtime of showtimes.sort(compareShowtimes)) {
     lines.push(`- ${showtime.experience} ${showtime.time}: ${showtime.listingStatus}`);
@@ -1817,14 +2094,15 @@ function formatRequestedDateShowtimesMessage(dateYmd, showtimes) {
   return lines.join('\n');
 }
 
-function formatRequestedDateResultMessage(dateYmd, showtimes, checked, failures, startedMs) {
+function formatRequestedDateResultMessage(dateYmd, showtimes, checked, failures, startedMs, options = {}) {
   const lines = [];
   const interestingShowtimes = CONFIG.legacyInterestedAlerts ? checked.filter((showtime) => showtime.interestedAvailable > 0) : [];
   const targetShowtimes = checked.filter((showtime) => showtime.targetAvailable > 0);
   const checkedByKey = new Map(checked.map((seatInfo) => [seatInfo.key, seatInfo]));
 
   lines.push('REQUESTED DATE CHECK DONE');
-  lines.push(`${displayDate(dateYmd)} - ${CONFIG.movie} ${formatExperienceLabel()}`);
+  lines.push(`${displayDate(dateYmd)} - ${CONFIG.movie} ${formatRequestExperienceLabel(options)}`);
+  lines.push(`Targets: ${formatTargetRanges(options)}${formatAdjacentRequirement(options)}`);
   lines.push(`Showtimes: ${showtimes.length}, seat checks: ${checked.length}`);
 
   if (targetShowtimes.length) {
@@ -1833,6 +2111,7 @@ function formatRequestedDateResultMessage(dateYmd, showtimes, checked, failures,
     for (const seatInfo of targetShowtimes.sort(compareShowtimes)) {
       lines.push(`- ${seatInfo.experience} ${seatInfo.time}: ${seatInfo.targetAvailable} target seat(s)`);
       lines.push(`  Seats: ${formatSeatList(seatInfo.targetAvailableSeats, 20)}`);
+      if (seatInfo.minAdjacentSeats > 1) lines.push(`  Groups: ${formatSeatGroups(seatInfo.targetSeatGroups)}`);
       lines.push(`  Booking: ${bookingUrl(seatInfo)}`);
     }
   }
@@ -1847,7 +2126,7 @@ function formatRequestedDateResultMessage(dateYmd, showtimes, checked, failures,
     }
   } else if (!targetShowtimes.length) {
     lines.push('');
-    lines.push(`No target seats found (${formatTargetRanges()}).`);
+    lines.push(`No target seats found (${formatTargetRanges(options)}${formatAdjacentRequirement(options)}).`);
   }
 
   lines.push('');
@@ -1871,6 +2150,9 @@ function formatRequestedDateResultMessage(dateYmd, showtimes, checked, failures,
 
 function formatSeatCheckStatus(seatInfo) {
   if (seatInfo.seatCount === 0 && seatInfo.soldOut) return 'unavailable/sold out';
+  if (seatInfo.minAdjacentSeats > 1) {
+    return `${seatInfo.available}/${seatInfo.seatCount} available, ${seatInfo.targetSeatGroups.length} target group(s) of ${seatInfo.minAdjacentSeats}+ seats, ${seatInfo.allTargetAvailable} target seat(s) total`;
+  }
   return `${seatInfo.available}/${seatInfo.seatCount} available, ${seatInfo.targetAvailable} target`;
 }
 
@@ -1903,7 +2185,9 @@ function formatPrioritySeatMessage(seatInfo) {
   lines.push('TARGET SEATS AVAILABLE');
   lines.push(`${displayDate(seatInfo.date)} ${seatInfo.time}`);
   lines.push(`${seatInfo.experience || formatExperienceLabel()}${seatInfo.screen ? ` - ${seatInfo.screen}` : ''}`);
+  if (seatInfo.minAdjacentSeats > 1) lines.push(`Need: ${seatInfo.minAdjacentSeats} seats together`);
   lines.push(`Seats: ${formatSeatList(seatInfo.targetAvailableSeats, 20)}`);
+  if (seatInfo.minAdjacentSeats > 1) lines.push(`Groups: ${formatSeatGroups(seatInfo.targetSeatGroups)}`);
   lines.push(`Booking: ${bookingUrl(seatInfo)}`);
   return lines.join('\n');
 }
