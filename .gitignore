@@ -2,4 +2,5 @@
 /state.json
 /telegram-offset.json
 /network-measurements.jsonl
+/trial-*.jsonl
 /logs/

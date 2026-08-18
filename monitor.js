@@ -52,6 +52,8 @@ const CONFIG = {
   telegramCommands: boolEnv('VOX_TELEGRAM_COMMANDS', true),
   telegramCommandTimeoutSeconds: numberEnv('VOX_TELEGRAM_COMMAND_TIMEOUT_SECONDS', 25),
   telegramIgnoreOldUpdatesOnStart: boolEnv('VOX_TELEGRAM_IGNORE_OLD_UPDATES_ON_START', boolEnv('VOX_COMMAND_ONLY', false)),
+  newDayWatchEnabled: boolEnv('VOX_NEW_DAY_WATCH_ENABLED', false),
+  newDayWatchIntervalMinutes: numberEnv('VOX_NEW_DAY_WATCH_INTERVAL_MINUTES', 15),
   sendEveryCheck: boolEnv('VOX_SEND_EVERY_CHECK', false),
   notifySeatChanges: boolEnv('VOX_NOTIFY_SEAT_CHANGES', true),
   commandOnly: boolEnv('VOX_COMMAND_ONLY', false),
@@ -74,6 +76,8 @@ const CHECK_DATE_INPUT = getCheckDateInput();
 const CHECK_DATE = CHECK_DATE_INPUT ? parseCommandDate(CHECK_DATE_INPUT) : '';
 const NETWORK_MEASURE = createNetworkMeasure();
 let networkMeasureFlushTimer = null;
+let newDayWatchTimer = null;
+let scanInProgress = false;
 
 function loadDotEnv(filePath) {
   if (!fs.existsSync(filePath)) return;
@@ -552,13 +556,24 @@ function loadState() {
       seatSnapshots: state.seatSnapshots || {},
       prioritySnapshots: state.prioritySnapshots || {},
       releasedDates: state.releasedDates || {},
+      settings: normalizeRuntimeSettings(state.settings),
       lastRunAt: state.lastRunAt || null,
       lastFullSeatCheckAt: state.lastFullSeatCheckAt || null,
       lastDateScanFailureSignature: state.lastDateScanFailureSignature || null,
       hasSentBaseline: !!state.hasSentBaseline,
     };
   } catch {
-    return { showtimes: {}, seatSnapshots: {}, prioritySnapshots: {}, releasedDates: {}, lastRunAt: null, lastFullSeatCheckAt: null, lastDateScanFailureSignature: null, hasSentBaseline: false };
+    return {
+      showtimes: {},
+      seatSnapshots: {},
+      prioritySnapshots: {},
+      releasedDates: {},
+      settings: normalizeRuntimeSettings(),
+      lastRunAt: null,
+      lastFullSeatCheckAt: null,
+      lastDateScanFailureSignature: null,
+      hasSentBaseline: false,
+    };
   }
 }
 
@@ -567,6 +582,38 @@ function saveState(state) {
   const tmpFile = `${CONFIG.stateFile}.tmp`;
   fs.writeFileSync(tmpFile, `${JSON.stringify(state, null, 2)}\n`);
   fs.renameSync(tmpFile, CONFIG.stateFile);
+}
+
+function defaultRuntimeSettings() {
+  return {
+    newDayWatchEnabled: CONFIG.newDayWatchEnabled,
+    newDayWatchIntervalMinutes: CONFIG.newDayWatchIntervalMinutes,
+    newDayWatchLastRunAt: null,
+    newDayWatchLastUpdatedAt: null,
+  };
+}
+
+function normalizeRuntimeSettings(settings = {}) {
+  const defaults = defaultRuntimeSettings();
+  const interval = Number(settings && settings.newDayWatchIntervalMinutes);
+  return {
+    ...defaults,
+    ...(settings || {}),
+    newDayWatchEnabled: typeof settings?.newDayWatchEnabled === 'boolean'
+      ? settings.newDayWatchEnabled
+      : defaults.newDayWatchEnabled,
+    newDayWatchIntervalMinutes: Number.isFinite(interval) && interval > 0
+      ? interval
+      : defaults.newDayWatchIntervalMinutes,
+  };
+}
+
+function updateRuntimeSettings(updater) {
+  const state = loadState();
+  state.settings = normalizeRuntimeSettings(state.settings);
+  updater(state.settings, state);
+  saveState(state);
+  return state.settings;
 }
 
 function loadTelegramOffset() {
@@ -1057,10 +1104,15 @@ async function inspectSeats(browser, showtime) {
   return { ...showtime, ...seatMap, experience: seatMap.experience || showtime.experience };
 }
 
-async function runCycle() {
+async function runCycle(options = {}) {
   const cycleStartedMs = Date.now();
   const startedAt = new Date().toISOString();
-  resetNetworkMeasure(`cycle ${startedAt}`);
+  const cycleContext = options.context || 'cycle';
+  const noSeats = options.noSeats ?? NO_SEATS;
+  const autoSeatCheckModeConfig = options.autoSeatCheckMode || CONFIG.autoSeatCheckMode;
+  const sendBaseline = options.sendBaseline !== false;
+  const showtimeFetchMode = normalizeShowtimeFetchMode(options.showtimeFetchMode || CONFIG.showtimeFetchMode);
+  resetNetworkMeasure(`${cycleContext} ${startedAt}`);
   const state = loadState();
   let browser = null;
   const targetDates = buildTargetDates();
@@ -1069,6 +1121,8 @@ async function runCycle() {
   const checked = [];
   const alerts = [];
   const dateFailures = [];
+  const newDates = new Set();
+  const newDateMessages = [];
   const seatCheckReasons = new Map();
   const markSeatCheck = (showtime, reason) => {
     if (!showtime.bookingId) return;
@@ -1095,7 +1149,7 @@ async function runCycle() {
 
     let abortedDateScan = false;
     let datePages = [];
-    if (normalizeShowtimeFetchMode(CONFIG.showtimeFetchMode) === 'browser') {
+    if (showtimeFetchMode === 'browser') {
       browser = new ChromeSession();
       await browser.start();
 
@@ -1162,9 +1216,6 @@ async function runCycle() {
       dates[showtime.date].push(showtime);
       return dates;
     }, {});
-    const newDates = new Set();
-    const newDateMessages = [];
-
     for (const [date, dayShowtimes] of Object.entries(showtimesByDate).sort()) {
       const previousReleasedDate = state.releasedDates[date];
       if (!state.releasedDates[date]) {
@@ -1222,8 +1273,8 @@ async function runCycle() {
       log(`Sent ${immediateAlerts.length} immediate showtime alert(s) to Telegram.`);
     }
 
-    if (!NO_SEATS) {
-      const autoSeatCheckMode = normalizeAutoSeatCheckMode(CONFIG.autoSeatCheckMode);
+    if (!noSeats) {
+      const autoSeatCheckMode = normalizeAutoSeatCheckMode(autoSeatCheckModeConfig);
       const periodicFullSeatCheck = shouldRunPeriodicFullSeatCheck(state, startedAt);
       const seatShowtimeEntries = buildSeatCheckEntries(uniqueShowtimes, seatCheckReasons, autoSeatCheckMode, periodicFullSeatCheck);
       const seatShowtimes = seatShowtimeEntries
@@ -1318,7 +1369,8 @@ async function runCycle() {
   if (NETWORK_MEASURE.enabled) {
     log(formatNetworkMeasureSummary().replace(/\n/g, '\n  '));
     saveNetworkMeasure({
-      type: 'cycle',
+      type: cycleContext.startsWith('new-day-watch') ? 'new-day-watch' : 'cycle',
+      trigger: cycleContext,
       dateCount: targetDates.length,
       listedShowtimeCount: discovered.length,
       seatCheckCount: checked.length,
@@ -1328,18 +1380,18 @@ async function runCycle() {
   }
 
   if (canSendTelegram()) {
-    const shouldSend = CONFIG.sendEveryCheck || alerts.length > 0 || !state.hasSentBaseline;
+    const shouldSend = CONFIG.sendEveryCheck || alerts.length > 0 || (sendBaseline && !state.hasSentBaseline);
     if (shouldSend) {
       await sendTelegram(summary);
       log('Sent summary to Telegram.');
+      state.hasSentBaseline = true;
+      saveState(state);
     } else {
       log('No Telegram summary sent; no new alerts or target-seat changes.');
     }
-    state.hasSentBaseline = true;
-    saveState(state);
   }
 
-  return { checked, discovered, alerts, summary };
+  return { checked, discovered, alerts, summary, dateFailures, newDates: [...newDates] };
 }
 
 function normalizeAutoSeatCheckMode(value) {
@@ -1466,6 +1518,224 @@ function appendDateFailureAlerts(alerts, dateFailures, targetDateCount, state, o
   alerts.push(`SHOWTIME SCAN WARNING: ${dateFailures.length}/${targetDateCount} date page(s) failed: ${sample}${more}.`);
 }
 
+async function runScanGuarded(label, callback, options = {}) {
+  if (scanInProgress) {
+    if (options.skipIfBusy) {
+      log(`Skipping ${label}; another VOX scan is already running.`);
+      return { skipped: true };
+    }
+    log(`Waiting to run ${label}; another VOX scan is already running.`);
+    while (scanInProgress) await sleep(500);
+  }
+
+  scanInProgress = true;
+  try {
+    return await callback();
+  } finally {
+    scanInProgress = false;
+  }
+}
+
+function getRuntimeSettings() {
+  return normalizeRuntimeSettings(loadState().settings);
+}
+
+function newDayWatchIntervalMs(settings = getRuntimeSettings()) {
+  return Math.max(1, settings.newDayWatchIntervalMinutes) * 60 * 1000;
+}
+
+function stopNewDayWatchLoop() {
+  if (!newDayWatchTimer) return;
+  clearTimeout(newDayWatchTimer);
+  newDayWatchTimer = null;
+}
+
+function scheduleNewDayWatch(delayMs = null) {
+  stopNewDayWatchLoop();
+  const settings = getRuntimeSettings();
+  if (!settings.newDayWatchEnabled) return;
+  const resolvedDelayMs = delayMs === null ? newDayWatchIntervalMs(settings) : Math.max(0, Number(delayMs) || 0);
+
+  newDayWatchTimer = setTimeout(async () => {
+    newDayWatchTimer = null;
+    const currentSettings = getRuntimeSettings();
+    if (!currentSettings.newDayWatchEnabled) return;
+
+    try {
+      await runNewDayWatchOnce('scheduled', { skipIfBusy: true });
+    } catch (error) {
+      const message = `New-day watch failed: ${error.message || error}`;
+      log(message);
+      if (canSendTelegram()) {
+        try {
+          await sendTelegram(message);
+        } catch (sendError) {
+          log(`Could not send new-day watch failure to Telegram: ${sendError.message}`);
+        }
+      }
+    } finally {
+      const latestSettings = getRuntimeSettings();
+      if (latestSettings.newDayWatchEnabled) scheduleNewDayWatch(newDayWatchIntervalMs(latestSettings));
+    }
+  }, resolvedDelayMs);
+
+  if (typeof newDayWatchTimer.unref === 'function') newDayWatchTimer.unref();
+  log(`New-day watch scheduled in ${(resolvedDelayMs / 60000).toFixed(1)} minute(s).`);
+}
+
+async function runNewDayWatchOnce(trigger = 'manual', options = {}) {
+  const result = await runScanGuarded(
+    `new-day watch ${trigger}`,
+    async () => {
+      log(`Running new-day watch scan (${trigger}); seat maps are skipped.`);
+      const scanResult = await runCycle({
+        noSeats: true,
+        autoSeatCheckMode: 'none',
+        sendBaseline: false,
+        context: `new-day-watch ${trigger}`,
+      });
+      updateRuntimeSettings((settings) => {
+        settings.newDayWatchLastRunAt = new Date().toISOString();
+      });
+      return scanResult;
+    },
+    { skipIfBusy: !!options.skipIfBusy },
+  );
+
+  if (result?.skipped) {
+    if (options.notify) await sendTelegramOrLog('New-day watch skipped because another VOX scan is already running.');
+    return result;
+  }
+
+  if (options.notifyNoNew && !(result.newDates || []).length) {
+    await sendTelegramOrLog(formatNewDayWatchNoNewMessage(result));
+  }
+
+  if (NETWORK_MEASURE.enabled) resetNetworkMeasure('telegram-command-loop');
+  return result;
+}
+
+async function handleNewDayWatchCommand(args) {
+  const tokens = String(args || '').split(/\s+/).map(cleanCommandToken).filter(Boolean);
+  const action = normalizeNewDayWatchAction(tokens[0] || 'status');
+
+  if (!action) {
+    await sendTelegram(`I did not understand that /newdays command.\n\n${telegramCommandHelp()}`);
+    return;
+  }
+
+  if (action === 'help') {
+    await sendTelegram(telegramCommandHelp());
+    return;
+  }
+
+  if (action === 'status') {
+    await sendTelegram(formatNewDayWatchStatus(getRuntimeSettings()));
+    return;
+  }
+
+  if (action === 'now') {
+    await sendTelegram('Running one lightweight new-day scan now. Seat maps will be skipped.');
+    await runNewDayWatchOnce('manual', { notifyNoNew: true });
+    return;
+  }
+
+  const intervalMinutes = parseNewDayWatchInterval(tokens.slice(1));
+  if (action === 'interval' && !intervalMinutes) {
+    await sendTelegram('Usage: /newdays interval 15');
+    return;
+  }
+
+  if (action === 'off') {
+    const settings = updateRuntimeSettings((runtimeSettings) => {
+      runtimeSettings.newDayWatchEnabled = false;
+      runtimeSettings.newDayWatchLastUpdatedAt = new Date().toISOString();
+    });
+    stopNewDayWatchLoop();
+    await sendTelegram(formatNewDayWatchStatus(settings, 'NEW-DAY WATCH OFF'));
+    return;
+  }
+
+  if (action === 'interval') {
+    const settings = updateRuntimeSettings((runtimeSettings) => {
+      runtimeSettings.newDayWatchIntervalMinutes = intervalMinutes;
+      runtimeSettings.newDayWatchLastUpdatedAt = new Date().toISOString();
+    });
+    if (settings.newDayWatchEnabled) scheduleNewDayWatch(newDayWatchIntervalMs(settings));
+    await sendTelegram(formatNewDayWatchStatus(settings, 'NEW-DAY WATCH INTERVAL UPDATED'));
+    return;
+  }
+
+  if (action === 'on' || action === 'toggle') {
+    const settings = updateRuntimeSettings((runtimeSettings) => {
+      runtimeSettings.newDayWatchEnabled = action === 'toggle' ? !runtimeSettings.newDayWatchEnabled : true;
+      if (intervalMinutes) runtimeSettings.newDayWatchIntervalMinutes = intervalMinutes;
+      runtimeSettings.newDayWatchLastUpdatedAt = new Date().toISOString();
+    });
+
+    if (settings.newDayWatchEnabled) {
+      await sendTelegram(`${formatNewDayWatchStatus(settings, 'NEW-DAY WATCH ON')}\nFirst lightweight scan is starting now.`);
+      scheduleNewDayWatch(0);
+    } else {
+      stopNewDayWatchLoop();
+      await sendTelegram(formatNewDayWatchStatus(settings, 'NEW-DAY WATCH OFF'));
+    }
+  }
+}
+
+function normalizeNewDayWatchAction(value) {
+  const action = normalize(value).toLowerCase();
+  if (!action) return 'status';
+  if (['on', 'enable', 'enabled', 'start'].includes(action)) return 'on';
+  if (['off', 'disable', 'disabled', 'stop'].includes(action)) return 'off';
+  if (['toggle', 'switch'].includes(action)) return 'toggle';
+  if (['now', 'scan', 'run', 'check'].includes(action)) return 'now';
+  if (['status', 'state'].includes(action)) return 'status';
+  if (['help', '?'].includes(action)) return 'help';
+  if (['interval', 'every', 'minutes', 'mins'].includes(action)) return 'interval';
+  return '';
+}
+
+function parseNewDayWatchInterval(tokens) {
+  for (const token of tokens) {
+    const text = normalize(token).toLowerCase();
+    if (!text) continue;
+    const match = text.match(/^(?:every|interval|minute|minutes|min|mins)?[:=]?(\d+)m?$/);
+    if (!match) continue;
+    const value = Number(match[1]);
+    if (Number.isInteger(value) && value > 0 && value <= 24 * 60) return value;
+  }
+  return 0;
+}
+
+function formatNewDayWatchStatus(settings = getRuntimeSettings(), title = 'NEW-DAY WATCH') {
+  return [
+    title,
+    `Status: ${settings.newDayWatchEnabled ? 'on' : 'off'}`,
+    `Interval: every ${settings.newDayWatchIntervalMinutes} minute(s)`,
+    `Date window: ${formatDateWindow()}`,
+    'Mode: showtime/date pages only; no seat maps',
+    `Last run: ${settings.newDayWatchLastRunAt || 'not yet'}`,
+    'Commands: /newdays on | /newdays off | /newdays now | /newdays status | /newdays interval 5',
+  ].join('\n');
+}
+
+function formatNewDayWatchNoNewMessage(result = {}) {
+  return [
+    'NEW-DAY SCAN DONE',
+    `Date window: ${formatDateWindow()}`,
+    `Found: ${(result.discovered || []).length} listed ${formatExperienceLabel()} slot(s)`,
+    'No new released days found.',
+    'Seat maps: skipped',
+  ].join('\n');
+}
+
+function formatDateWindow() {
+  const dates = buildTargetDates();
+  if (!dates.length) return 'not configured';
+  return `${displayDate(dates[0])} to ${displayDate(dates[dates.length - 1])} (${dates.length} day(s))`;
+}
+
 function normalizeFailureMessage(message) {
   return String(message || '')
     .replace(/\bafter \d+ms\b/g, 'after TIMEOUT')
@@ -1484,6 +1754,11 @@ async function startTelegramCommandLoop() {
     log('Telegram commands enabled. Use /check 13/8 or /check 2026-08-13.');
   } catch (error) {
     log(`Telegram command setup failed: ${error.message}`);
+  }
+
+  if (getRuntimeSettings().newDayWatchEnabled) {
+    log('New-day watch is enabled; scheduling immediate lightweight scan.');
+    scheduleNewDayWatch(0);
   }
 
   while (true) {
@@ -1575,13 +1850,18 @@ async function handleTelegramUpdate(update) {
     return;
   }
 
+  if (['/newdays', '/newday', '/watchdays', '/watch'].includes(parsed.command)) {
+    await handleNewDayWatchCommand(parsed.args);
+    return;
+  }
+
   if (['/check', '/date', '/seats'].includes(parsed.command)) {
     const request = parseRequestedDateCommand(parsed.args);
     if (request.error) {
       await sendTelegram(`${request.error}\n\n${telegramCommandHelp()}`);
       return;
     }
-    await runRequestedDateCheck(request.dateYmd, request.options);
+    await runScanGuarded('requested-date check', () => runRequestedDateCheck(request.dateYmd, request.options));
     return;
   }
 
@@ -1592,7 +1872,7 @@ async function handleTelegramUpdate(update) {
       await sendTelegram(`${request.error}\n\n${telegramCommandHelp()}`);
       return;
     }
-    await runRequestedDateCheck(request.dateYmd, request.options);
+    await runScanGuarded('requested-date check', () => runRequestedDateCheck(request.dateYmd, request.options));
     return;
   }
 
@@ -2052,20 +2332,28 @@ function telegramCommandHelp() {
     '/seats 13/8 - alias for /check',
     '/today imax 2 - check today with options',
     '/tomorrow standard - check tomorrow with options',
+    '/newdays on - watch future days every 15 min, no seat maps',
+    '/newdays off - stop future-day watch',
+    '/newdays now - run one lightweight future-day scan',
+    '/newdays status - show future-day watch status',
+    '/newdays on 5 - turn on and scan every 5 min',
+    '/newdays interval 5 - change interval without toggling',
     '/status - monitor status',
   ].join('\n');
 }
 
 function formatCommandStatus() {
   const state = loadState();
-  const dates = buildTargetDates();
+  const settings = normalizeRuntimeSettings(state.settings);
   return [
     `VOX ${CONFIG.movie} ${formatExperienceLabel()} status`,
-    `Mode: ${CONFIG.commandOnly ? 'command-only; no automatic VOX scans' : 'automatic scan loop'}`,
+    `Mode: ${CONFIG.commandOnly ? 'command-only; /newdays can enable light day-release scans' : 'automatic scan loop'}`,
     `Last normal run: ${state.lastRunAt || 'not recorded yet'}`,
-    `Date window: ${displayDate(dates[0])} to ${displayDate(dates[dates.length - 1])}`,
+    `Date window: ${formatDateWindow()}`,
     `Targets: ${formatTargetRanges()}`,
     'Command options: add imax or standard; add 2/seats=2/adjacent=2 for seats together',
+    `New-day watch: ${settings.newDayWatchEnabled ? 'on' : 'off'}, every ${settings.newDayWatchIntervalMinutes} minute(s), no seat maps`,
+    `New-day last run: ${settings.newDayWatchLastRunAt || 'not yet'}`,
     `Poll: every ${CONFIG.pollMinutes} minute(s)`,
     `Commands: ${CONFIG.telegramCommands ? 'enabled' : 'disabled'}`,
   ].join('\n');
@@ -2322,7 +2610,7 @@ async function main() {
   while (true) {
     const loopStartedMs = Date.now();
     try {
-      await runCycle();
+      await runScanGuarded('scheduled monitor cycle', () => runCycle());
     } catch (error) {
       const message = `VOX monitor error: ${error.stack || error.message || error}`;
       console.error(message);
